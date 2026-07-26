@@ -1,0 +1,180 @@
+//@version=5
+// =============================================================================
+//  ICC + OTE  —  Indication · Correction · Continuation
+//  Strategy blend: ICC (Trades by Sci) + ICT (FVG / Order Blocks) + OTE Fib
+// -----------------------------------------------------------------------------
+//  HOW IT WORKS
+//   1. INDICATION  -> a break of structure (higher-high / lower-low pivot)
+//                     signals institutional intent. Optional FVG confluence.
+//   2. CORRECTION  -> price retraces into the OTE zone (0.62–0.79 fib) of the
+//                     indication leg. This is the entry.
+//   3. CONTINUATION-> trade runs in the indication direction to a target that
+//                     is a multiple (R) of the stop distance.
+//
+//  This is a TEMPLATE / educational tool, NOT financial advice. Backtest,
+//  forward-test on a demo, and understand every input before risking money.
+// =============================================================================
+strategy(
+     title             = "ICC + OTE — Indication · Correction · Continuation",
+     shorttitle        = "ICC-OTE",
+     overlay           = true,
+     initial_capital   = 10000,
+     default_qty_type  = strategy.percent_of_equity,
+     default_qty_value = 10,
+     commission_type   = strategy.commission.percent,
+     commission_value  = 0.02,
+     slippage          = 1,
+     pyramiding        = 0,
+     process_orders_on_close = true,
+     calc_on_order_fills     = true)
+
+// ------------------------------- Inputs --------------------------------------
+grpStruct = "① Structure (Indication)"
+pivotLen  = input.int(5, "Swing lookback (pivots)", minval=2, group=grpStruct,
+     tooltip="Bars required each side to confirm a swing high / low. Higher = fewer, stronger swings.")
+
+grpOte  = "② OTE / Correction"
+fibLow  = input.float(0.62, "OTE shallow (fib)", minval=0.3, maxval=0.99, step=0.01, group=grpOte,
+     tooltip="Shallowest retracement of the OTE zone. Classic ICT = 0.62.")
+fibHigh = input.float(0.79, "OTE deep (fib)", minval=0.3, maxval=0.99, step=0.01, group=grpOte,
+     tooltip="Deepest retracement of the OTE zone. Classic ICT = 0.79.")
+useFVG  = input.bool(true, "Require Fair Value Gap confluence", group=grpOte,
+     tooltip="Only take setups where a fair value gap formed on the indication leg.")
+
+grpRisk    = "③ Risk / Continuation"
+slBufTicks = input.float(4, "Stop buffer (ticks beyond swing)", minval=0, group=grpRisk,
+     tooltip="Extra ticks placed beyond the leg origin so wicks don't clip your stop.")
+rr         = input.float(2.5, "Target (R multiple)", minval=0.5, step=0.1, group=grpRisk,
+     tooltip="Take-profit distance as a multiple of the stop distance. 2.5 = risk 1 to make 2.5.")
+
+grpSess    = "④ Session filter (kill zones)"
+useSession = input.bool(false, "Only trade inside session", group=grpSess)
+sess       = input.session("0930-1600", "Session (exchange time)", group=grpSess,
+     tooltip="Restrict entries to a kill zone, e.g. NY 0930-1600. Requires the toggle above.")
+
+grpDir  = "⑤ Direction"
+allowLong  = input.bool(true, "Allow longs", group=grpDir)
+allowShort = input.bool(true, "Allow shorts", group=grpDir)
+
+// --------------------------- Swing detection ---------------------------------
+ph = ta.pivothigh(pivotLen, pivotLen)
+pl = ta.pivotlow(pivotLen, pivotLen)
+
+var float lastPH = na
+var float prevPH = na
+var float lastPL = na
+var float prevPL = na
+
+if not na(ph)
+    prevPH := lastPH
+    lastPH := ph
+if not na(pl)
+    prevPL := lastPL
+    lastPL := pl
+
+// Break of structure = a fresh pivot that takes out the prior pivot in kind.
+bullBOS = not na(ph) and not na(prevPH) and ph > prevPH and not na(lastPL)
+bearBOS = not na(pl) and not na(prevPL) and pl < prevPL and not na(lastPH)
+
+// ---------------------------- Fair Value Gaps --------------------------------
+// 3-candle imbalance: bullish gap when current low sits above the high 2 bars back.
+bullFVG = low  > high[2]
+bearFVG = high < low[2]
+fvgWindow = pivotLen * 3
+hasBullFVG = ta.barssince(bullFVG) <= fvgWindow
+hasBearFVG = ta.barssince(bearFVG) <= fvgWindow
+
+// ------------------------------ Setup state ----------------------------------
+// dir:  1 = bullish setup armed, -1 = bearish setup armed, 0 = none
+var int   dir     = 0
+var float legHi   = na
+var float legLo   = na
+var float oteShal = na   // 62% level (first touch of the OTE zone)
+var float oteDeep = na   // 79% level (deepest edge of the OTE zone)
+var bool  entered = false
+
+tick = syminfo.mintick
+
+// Arm a bullish setup on bullish BOS (with optional FVG confluence).
+if allowLong and bullBOS and (not useFVG or hasBullFVG)
+    dir     := 1
+    legHi   := ph
+    legLo   := lastPL
+    float r  = legHi - legLo
+    oteShal := legHi - r * fibLow
+    oteDeep := legHi - r * fibHigh
+    entered := false
+
+// Arm a bearish setup on bearish BOS (with optional FVG confluence).
+if allowShort and bearBOS and (not useFVG or hasBearFVG)
+    dir     := -1
+    legLo   := pl
+    legHi   := lastPH
+    float r  = legHi - legLo
+    oteShal := legLo + r * fibLow
+    oteDeep := legLo + r * fibHigh
+    entered := false
+
+// Invalidate an armed setup if structure breaks before the correction completes.
+if dir == 1 and low <= legLo
+    dir := 0
+if dir == -1 and high >= legHi
+    dir := 0
+
+// ------------------------------- Entries -------------------------------------
+inSession = not useSession or not na(time(timeframe.period, sess))
+flat      = strategy.position_size == 0
+canTrade  = flat and inSession
+
+// Long: price corrects DOWN into the OTE zone (touches the shallow edge first).
+bullTouch = dir == 1 and not entered and low <= oteShal and low > legLo
+// Short: price corrects UP into the OTE zone (touches the shallow edge first).
+bearTouch = dir == -1 and not entered and high >= oteShal and high < legHi
+
+var float lastEntry = na
+var float lastSL    = na
+var float lastTP    = na
+
+if bullTouch and canTrade
+    float entryP = close
+    float sl     = legLo - slBufTicks * tick
+    float risk   = entryP - sl
+    float tp     = entryP + risk * rr
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long exit", "Long", stop=sl, limit=tp)
+    lastEntry := entryP
+    lastSL    := sl
+    lastTP    := tp
+    entered   := true
+    dir       := 0
+    alert('{"strategy":"ICC-OTE","ticker":"' + syminfo.tickerid + '","action":"buy","price":' + str.tostring(entryP) + ',"sl":' + str.tostring(sl) + ',"tp":' + str.tostring(tp) + ',"tf":"' + timeframe.period + '"}', alert.freq_once_per_bar)
+
+if bearTouch and canTrade
+    float entryP = close
+    float sl     = legHi + slBufTicks * tick
+    float risk   = sl - entryP
+    float tp     = entryP - risk * rr
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short exit", "Short", stop=sl, limit=tp)
+    lastEntry := entryP
+    lastSL    := sl
+    lastTP    := tp
+    entered   := true
+    dir       := 0
+    alert('{"strategy":"ICC-OTE","ticker":"' + syminfo.tickerid + '","action":"sell","price":' + str.tostring(entryP) + ',"sl":' + str.tostring(sl) + ',"tp":' + str.tostring(tp) + ',"tf":"' + timeframe.period + '"}', alert.freq_once_per_bar)
+
+// ------------------------------- Plotting ------------------------------------
+zoneCol = dir == 1 ? color.new(color.teal, 80) : dir == -1 ? color.new(color.red, 80) : na
+pShal = plot(dir != 0 ? oteShal : na, "OTE 0.62", color=color.new(color.gray, 0), style=plot.style_linebr, linewidth=1)
+pDeep = plot(dir != 0 ? oteDeep : na, "OTE 0.79", color=color.new(color.gray, 0), style=plot.style_linebr, linewidth=1)
+fill(pShal, pDeep, color=zoneCol, title="OTE zone")
+
+plot(dir != 0 ? legHi : na, "Leg high", color=color.new(color.blue, 40), style=plot.style_linebr)
+plot(dir != 0 ? legLo : na, "Leg low",  color=color.new(color.blue, 40), style=plot.style_linebr)
+
+plotshape(bullBOS, title="Bull BOS", style=shape.triangleup,   location=location.belowbar, color=color.new(color.teal, 0), size=size.tiny)
+plotshape(bearBOS, title="Bear BOS", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0),  size=size.tiny)
+
+// -------------------------- Alert convenience --------------------------------
+// Use "Any alert() function call" when creating the alert in TradingView so the
+// JSON payloads above are delivered to your webhook.

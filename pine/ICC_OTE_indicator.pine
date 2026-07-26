@@ -1,0 +1,95 @@
+//@version=5
+// =============================================================================
+//  ICC + OTE — Indicator / Alerts edition
+//  Same Indication · Correction · Continuation logic as the strategy, but as an
+//  indicator: it plots the OTE zone and fires alertcondition() signals you can
+//  attach to TradingView alerts (and forward to the webhook bridge).
+//
+//  Use this if you want alerts only (no backtest engine), or on a plan where you
+//  prefer indicator alerts. Educational template — not financial advice.
+// =============================================================================
+indicator("ICC + OTE — Alerts", shorttitle="ICC-OTE Alerts", overlay=true, max_labels_count=200)
+
+// ------------------------------- Inputs --------------------------------------
+pivotLen  = input.int(5, "Swing lookback (pivots)", minval=2)
+fibLow    = input.float(0.62, "OTE shallow (fib)", minval=0.3, maxval=0.99, step=0.01)
+fibHigh   = input.float(0.79, "OTE deep (fib)",    minval=0.3, maxval=0.99, step=0.01)
+useFVG    = input.bool(true,  "Require Fair Value Gap confluence")
+allowLong  = input.bool(true, "Allow longs")
+allowShort = input.bool(true, "Allow shorts")
+
+// --------------------------- Swing detection ---------------------------------
+ph = ta.pivothigh(pivotLen, pivotLen)
+pl = ta.pivotlow(pivotLen, pivotLen)
+
+var float lastPH = na
+var float prevPH = na
+var float lastPL = na
+var float prevPL = na
+if not na(ph)
+    prevPH := lastPH
+    lastPH := ph
+if not na(pl)
+    prevPL := lastPL
+    lastPL := pl
+
+bullBOS = not na(ph) and not na(prevPH) and ph > prevPH and not na(lastPL)
+bearBOS = not na(pl) and not na(prevPL) and pl < prevPL and not na(lastPH)
+
+// ---------------------------- Fair Value Gaps --------------------------------
+bullFVG = low  > high[2]
+bearFVG = high < low[2]
+fvgWindow  = pivotLen * 3
+hasBullFVG = ta.barssince(bullFVG) <= fvgWindow
+hasBearFVG = ta.barssince(bearFVG) <= fvgWindow
+
+// ------------------------------ Setup state ----------------------------------
+var int   dir     = 0
+var float legHi   = na
+var float legLo   = na
+var float oteShal = na
+var float oteDeep = na
+var bool  entered = false
+
+if allowLong and bullBOS and (not useFVG or hasBullFVG)
+    dir     := 1
+    legHi   := ph
+    legLo   := lastPL
+    float r  = legHi - legLo
+    oteShal := legHi - r * fibLow
+    oteDeep := legHi - r * fibHigh
+    entered := false
+
+if allowShort and bearBOS and (not useFVG or hasBearFVG)
+    dir     := -1
+    legLo   := pl
+    legHi   := lastPH
+    float r  = legHi - legLo
+    oteShal := legLo + r * fibLow
+    oteDeep := legLo + r * fibHigh
+    entered := false
+
+if dir == 1 and low <= legLo
+    dir := 0
+if dir == -1 and high >= legHi
+    dir := 0
+
+// ------------------------------- Signals -------------------------------------
+longSig  = dir == 1 and not entered and low  <= oteShal and low  > legLo
+shortSig = dir == -1 and not entered and high >= oteShal and high < legHi
+if longSig or shortSig
+    entered := true
+    dir     := 0
+
+// ------------------------------- Plotting ------------------------------------
+zoneCol = dir == 1 ? color.new(color.teal, 80) : dir == -1 ? color.new(color.red, 80) : na
+pShal = plot(dir != 0 ? oteShal : na, "OTE 0.62", color=color.new(color.gray, 0), style=plot.style_linebr)
+pDeep = plot(dir != 0 ? oteDeep : na, "OTE 0.79", color=color.new(color.gray, 0), style=plot.style_linebr)
+fill(pShal, pDeep, color=zoneCol, title="OTE zone")
+
+plotshape(longSig,  title="Long entry",  style=shape.labelup,   location=location.belowbar, color=color.teal, text="ICC▲", textcolor=color.white, size=size.small)
+plotshape(shortSig, title="Short entry", style=shape.labeldown, location=location.abovebar, color=color.red,  text="ICC▼", textcolor=color.white, size=size.small)
+
+// ------------------------------- Alerts --------------------------------------
+alertcondition(longSig,  title="ICC-OTE Long",  message='{"strategy":"ICC-OTE","ticker":"{{ticker}}","action":"buy","price":{{close}},"tf":"{{interval}}"}')
+alertcondition(shortSig, title="ICC-OTE Short", message='{"strategy":"ICC-OTE","ticker":"{{ticker}}","action":"sell","price":{{close}},"tf":"{{interval}}"}')
