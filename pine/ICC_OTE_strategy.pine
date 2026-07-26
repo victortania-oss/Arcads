@@ -49,6 +49,14 @@ fibHigh = input.float(0.79, "OTE deep (fib)",    minval=0.3, maxval=0.99, step=0
 useFVG  = input.bool(true,  "Require 1H Fair Value Gap confluence", group=grpOte,
      tooltip="Only enter when a fair value gap formed on the entry (chart) timeframe.")
 
+grpLiq       = "③b Liquidity sweep"
+useSweep     = input.bool(false, "Require liquidity sweep before entry", group=grpLiq,
+     tooltip="ICT refinement: only take the entry if the correction first swept a prior 1H swing low (longs) / high (shorts) and closed back inside — a stop raid.")
+sweepPivotLen = input.int(3, "Minor swing lookback (1H)", minval=1, group=grpLiq,
+     tooltip="Bars each side for the minor 1H swings whose liquidity must be swept.")
+sweepWindow  = input.int(10, "Sweep valid for N bars", minval=1, group=grpLiq,
+     tooltip="How recently the sweep must have happened for the entry to still count.")
+
 grpRisk    = "④ Risk / Continuation"
 slBufTicks = input.float(4, "Stop buffer (ticks beyond leg)", minval=0, group=grpRisk)
 rr         = input.float(2.5, "Target (R multiple)", minval=0.5, step=0.1, group=grpRisk)
@@ -143,12 +151,27 @@ if bearFVG
     bearOBhi := high[obi]
     bearOBlo := low[obi]
 
+// -------------------- 1H liquidity sweep (stop raid) -------------------------
+// A minor 1H swing low/high whose liquidity the correction takes before reversing.
+phN = ta.pivothigh(sweepPivotLen, sweepPivotLen)
+plN = ta.pivotlow(sweepPivotLen, sweepPivotLen)
+var float lastMinorLow  = na
+var float lastMinorHigh = na
+if not na(plN)
+    lastMinorLow  := plN
+if not na(phN)
+    lastMinorHigh := phN
+bullSweep = not na(lastMinorLow)  and low  < lastMinorLow  and close > lastMinorLow
+bearSweep = not na(lastMinorHigh) and high > lastMinorHigh and close < lastMinorHigh
+hasBullSweep = ta.barssince(bullSweep) <= sweepWindow
+hasBearSweep = ta.barssince(bearSweep) <= sweepWindow
+
 // ------------------------------- Entries -------------------------------------
 inZoneLong  = dir == 1  and not na(oteShal) and low  <= oteShal and low  > legLo
 inZoneShort = dir == -1 and not na(oteShal) and high >= oteShal and high < legHi
 
-longSig  = allowLong  and inZoneLong  and (not useFVG or hasBullFVG) and not entered and strategy.position_size == 0
-shortSig = allowShort and inZoneShort and (not useFVG or hasBearFVG) and not entered and strategy.position_size == 0
+longSig  = allowLong  and inZoneLong  and (not useFVG or hasBullFVG) and (not useSweep or hasBullSweep) and not entered and strategy.position_size == 0
+shortSig = allowShort and inZoneShort and (not useFVG or hasBearFVG) and (not useSweep or hasBearSweep) and not entered and strategy.position_size == 0
 
 if longSig
     entryP = close
@@ -193,6 +216,8 @@ if showOB and bearFVG and not na(bearOBlo)
 
 plotshape(longSig,  title="Long entry",  style=shape.labelup,   location=location.belowbar, color=color.teal, text="ICC▲", textcolor=color.white, size=size.small)
 plotshape(shortSig, title="Short entry", style=shape.labeldown, location=location.abovebar, color=color.red,  text="ICC▼", textcolor=color.white, size=size.small)
+plotchar(useSweep and bullSweep, title="Bull sweep", char="⨯", location=location.belowbar, color=color.new(color.teal, 0), size=size.tiny)
+plotchar(useSweep and bearSweep, title="Bear sweep", char="⨯", location=location.abovebar, color=color.new(color.red, 0),  size=size.tiny)
 
 // Bias table
 f_arrow(b) => b == 1 ? "▲ Bull" : b == -1 ? "▼ Bear" : "– None"

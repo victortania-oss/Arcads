@@ -45,6 +45,21 @@ The bot draws the **OTE zone** on the aligned 4H leg using Fibonacci:
 - **Target** is a configurable **R multiple** (default 2.5R) as price continues toward
   liquidity beyond the indication swing.
 
+## Liquidity sweep filter (optional ICT refinement)
+
+Turn on **Require liquidity sweep before entry** to demand a **stop raid** before you
+commit — a hallmark of the ICT entry model:
+
+- **Longs:** the correction must first dip **below a prior minor 1H swing low** and
+  **close back above it** (sweeping resting sell-side liquidity) before the OTE tap.
+- **Shorts:** mirror — sweep a prior minor 1H swing high and close back below it.
+- A small **⨯** marks each qualifying sweep on the chart. The sweep stays valid for
+  *N* bars (default 10) so the entry can follow shortly after the raid.
+
+Inputs: *Minor swing lookback (1H)* controls how significant the swept level must be
+(default 3); *Sweep valid for N bars* is the window. This filter cuts trades but tends
+to improve entry quality — backtest it on/off per symbol.
+
 ## Inputs cheat-sheet
 
 | Input | What it does | Typical |
@@ -55,8 +70,33 @@ The bot draws the **OTE zone** on the aligned 4H leg using Fibonacci:
 | Swing lookback | Strictness of HTF swing detection | 5 |
 | OTE shallow / deep | Fib edges of the entry zone | 0.62 / 0.79 |
 | Require 1H FVG confluence | Only enter with displacement | On |
-| Stop buffer (ticks) | Padding beyond the swing | 4 |
+| Require liquidity sweep | Demand a stop raid first | Off (test per symbol) |
+| Minor swing lookback (1H) | Significance of swept level | 3 |
+| Stop buffer (ticks) | Padding beyond the swing | see presets |
 | Target (R multiple) | Reward vs. risk | 2.0–3.0 |
+
+## Per-market presets (starting points)
+
+Copy these into the inputs, then backtest and adjust. "Stop buffer" is in **ticks**
+(the instrument's `mintick`), so it scales to each symbol automatically.
+
+| Setting | **MNQ1!** (Micro Nasdaq) | **MES1!** (Micro S&P) | **XAUUSD** (Gold) | **Crypto** (BTC/ETH) |
+|---|---|---|---|---|
+| Bias / Confirm / Entry | 1D / 4H / 1H | 1D / 4H / 1H | 1D / 4H / 1H | 1D / 4H / 1H |
+| Swing lookback | 5 | 5 | 6–7 | 5 |
+| OTE shallow / deep | 0.62 / 0.79 | 0.62 / 0.79 | 0.62 / 0.79 | 0.62 / 0.79 |
+| Require 1H FVG | On | On | On | On |
+| Require liquidity sweep | Optional | Optional | **On** (gold loves stop raids) | Optional |
+| Minor swing lookback | 3 | 3 | 3–4 | 3 |
+| Stop buffer (ticks) | 8 (≈2.0 pts) | 8 (≈2.0 pts) | 20 (≈$2.00) | 10 |
+| Target (R multiple) | 2.5 | 2.5 | 2.0–2.5 | 3.0 |
+
+Rationale:
+- **XAUUSD** wicks aggressively and raids liquidity often → wider stop buffer, a higher
+  swing lookback to ignore noise, and the sweep filter on.
+- **MNQ vs MES**: same structure, but MNQ moves ~4× the points of MES per unit — the
+  tick-based buffer keeps risk comparable. Watch tick value when sizing.
+- **Crypto** trends hard and runs 24/7 → a higher target (3R) captures the continuation.
 
 ## Tuning per market
 

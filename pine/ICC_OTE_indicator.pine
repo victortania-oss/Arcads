@@ -18,6 +18,9 @@ pivotLen  = input.int(5, "Swing lookback (pivots)", minval=2)
 fibLow    = input.float(0.62, "OTE shallow (fib)", minval=0.3, maxval=0.99, step=0.01)
 fibHigh   = input.float(0.79, "OTE deep (fib)",    minval=0.3, maxval=0.99, step=0.01)
 useFVG    = input.bool(true,  "Require 1H FVG confluence")
+useSweep      = input.bool(false, "Require liquidity sweep before entry")
+sweepPivotLen = input.int(3,  "Minor swing lookback (1H)", minval=1)
+sweepWindow   = input.int(10, "Sweep valid for N bars", minval=1)
 allowLong  = input.bool(true, "Allow longs")
 allowShort = input.bool(true, "Allow shorts")
 showZone  = input.bool(true, "Show OTE zone + Fib")
@@ -98,11 +101,25 @@ if bearFVG
     bearOBhi := high[obi]
     bearOBlo := low[obi]
 
+// -------------------- 1H liquidity sweep (stop raid) -------------------------
+phN = ta.pivothigh(sweepPivotLen, sweepPivotLen)
+plN = ta.pivotlow(sweepPivotLen, sweepPivotLen)
+var float lastMinorLow  = na
+var float lastMinorHigh = na
+if not na(plN)
+    lastMinorLow  := plN
+if not na(phN)
+    lastMinorHigh := phN
+bullSweep = not na(lastMinorLow)  and low  < lastMinorLow  and close > lastMinorLow
+bearSweep = not na(lastMinorHigh) and high > lastMinorHigh and close < lastMinorHigh
+hasBullSweep = ta.barssince(bullSweep) <= sweepWindow
+hasBearSweep = ta.barssince(bearSweep) <= sweepWindow
+
 // ------------------------------- Signals -------------------------------------
 inZoneLong  = dir == 1  and not na(oteShal) and low  <= oteShal and low  > legLo
 inZoneShort = dir == -1 and not na(oteShal) and high >= oteShal and high < legHi
-longSig  = allowLong  and inZoneLong  and (not useFVG or hasBullFVG) and not entered
-shortSig = allowShort and inZoneShort and (not useFVG or hasBearFVG) and not entered
+longSig  = allowLong  and inZoneLong  and (not useFVG or hasBullFVG) and (not useSweep or hasBullSweep) and not entered
+shortSig = allowShort and inZoneShort and (not useFVG or hasBearFVG) and (not useSweep or hasBearSweep) and not entered
 if longSig or shortSig
     entered := true
 
@@ -124,6 +141,8 @@ if showOB and bearFVG and not na(bearOBlo)
 
 plotshape(longSig,  title="Long entry",  style=shape.labelup,   location=location.belowbar, color=color.teal, text="ICC▲", textcolor=color.white, size=size.small)
 plotshape(shortSig, title="Short entry", style=shape.labeldown, location=location.abovebar, color=color.red,  text="ICC▼", textcolor=color.white, size=size.small)
+plotchar(useSweep and bullSweep, title="Bull sweep", char="⨯", location=location.belowbar, color=color.new(color.teal, 0), size=size.tiny)
+plotchar(useSweep and bearSweep, title="Bear sweep", char="⨯", location=location.abovebar, color=color.new(color.red, 0),  size=size.tiny)
 
 f_arrow(b) => b == 1 ? "▲ Bull" : b == -1 ? "▼ Bear" : "– None"
 f_col(b)   => b == 1 ? color.teal : b == -1 ? color.red : color.gray
