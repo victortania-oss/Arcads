@@ -37,8 +37,11 @@ The bot draws the **OTE zone** on the aligned 4H leg using Fibonacci:
   in orange. The zone shades teal (longs) / red (shorts).
 - Highs/lows of the leg are marked. On the 1H it boxes the most recent **FVG** (teal/red)
   and the **order block** (green/maroon) so your confluence is drawn for you.
-- **Entry** is the first 1H tap into the OTE zone. If price breaks the leg origin before
-  tagging the zone, the setup is **invalidated** and the bot stands down.
+- **Entry is a resting limit order** placed at your chosen Fib level (the magenta line —
+  default the **0.705 sweet spot**). You are filled *only if price trades into the zone*;
+  if it doesn't, the order is cancelled and nothing happens. This is the authentic OTE
+  entry and makes the backtest honest (no filling at a worse "market" price). If price
+  breaks the leg origin before reaching the level, the setup is **invalidated**.
 
 ### 3. Continuation
 - **Stop** sits just beyond the leg origin (the 1.0 Fib), plus a small tick buffer.
@@ -69,6 +72,7 @@ to improve entry quality — backtest it on/off per symbol.
 | Draw OTE / Fib on | Which HTF leg carries the zone | `Confirmation` (4H) |
 | Swing lookback | Strictness of HTF swing detection | 5 |
 | OTE shallow / deep | Fib edges of the entry zone | 0.62 / 0.79 |
+| Limit entry level | Fib level the resting order sits at | 0.705 (sweet spot) |
 | Require 1H FVG confluence | Only enter with displacement | On |
 | Require liquidity sweep | Demand a stop raid first | Off (test per symbol) |
 | Minor swing lookback (1H) | Significance of swept level | 3 |

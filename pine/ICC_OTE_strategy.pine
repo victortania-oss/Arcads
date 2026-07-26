@@ -48,6 +48,8 @@ fibLow  = input.float(0.62, "OTE shallow (fib)", minval=0.3, maxval=0.99, step=0
 fibHigh = input.float(0.79, "OTE deep (fib)",    minval=0.3, maxval=0.99, step=0.01, group=grpOte)
 useFVG  = input.bool(true,  "Require 1H Fair Value Gap confluence", group=grpOte,
      tooltip="Only enter when a fair value gap formed on the entry (chart) timeframe.")
+entryLevelStr = input.string("0.705 (sweet spot)", "Limit entry level", options=["0.62 (shallow)", "0.705 (sweet spot)", "0.79 (deep)"], group=grpOte,
+     tooltip="A resting limit order is placed at this Fib level. You only get filled if price trades into the zone — the authentic OTE entry.")
 
 grpLiq       = "③b Liquidity sweep"
 useSweep     = input.bool(false, "Require liquidity sweep before entry", group=grpLiq,
@@ -120,6 +122,11 @@ oteShal = na(rng) ? na : dir == 1 ? legHi - rng * fibLow : dir == -1 ? legLo + r
 oteDeep = na(rng) ? na : dir == 1 ? legHi - rng * fibHigh : dir == -1 ? legLo + rng * fibHigh : na
 oteMid  = na(rng) ? na : dir == 1 ? legHi - rng * 0.705   : dir == -1 ? legLo + rng * 0.705   : na
 
+// Chosen limit-entry Fib level (where the resting order sits).
+entryFib   = entryLevelStr == "0.62 (shallow)" ? fibLow : entryLevelStr == "0.79 (deep)" ? fibHigh : 0.705
+limitLong  = na(rng) ? na : legHi - rng * entryFib
+limitShort = na(rng) ? na : legLo + rng * entryFib
+
 // Reset the "already entered this leg" flag whenever the HTF leg changes.
 var bool  entered   = false
 var float prevLegHi = na
@@ -167,31 +174,47 @@ hasBullSweep = ta.barssince(bullSweep) <= sweepWindow
 hasBearSweep = ta.barssince(bearSweep) <= sweepWindow
 
 // ------------------------------- Entries -------------------------------------
-inZoneLong  = dir == 1  and not na(oteShal) and low  <= oteShal and low  > legLo
-inZoneShort = dir == -1 and not na(oteShal) and high >= oteShal and high < legHi
+// Setup is "armed" once bias aligns and confluence holds. While armed and flat, a
+// resting LIMIT order sits at the chosen OTE level — it fills only if price trades
+// into the zone (authentic OTE), otherwise it's cancelled when the setup dies.
+armLong  = allowLong  and dir == 1  and not entered and not na(limitLong)  and close > legLo and (not useFVG or hasBullFVG) and (not useSweep or hasBullSweep)
+armShort = allowShort and dir == -1 and not entered and not na(limitShort) and close < legHi and (not useFVG or hasBearFVG) and (not useSweep or hasBearSweep)
 
-longSig  = allowLong  and inZoneLong  and (not useFVG or hasBullFVG) and (not useSweep or hasBullSweep) and not entered and strategy.position_size == 0
-shortSig = allowShort and inZoneShort and (not useFVG or hasBearFVG) and (not useSweep or hasBearSweep) and not entered and strategy.position_size == 0
+// Stored stop / target for the pending (or open) trade.
+var float pendSLlong  = na
+var float pendTPlong  = na
+var float pendSLshort = na
+var float pendTPshort = na
 
-if longSig
-    entryP = close
-    sl     = legLo - slBufTicks * syminfo.mintick
-    risk   = entryP - sl
-    tp     = entryP + risk * rr
-    strategy.entry("Long", strategy.long)
-    strategy.exit("Long exit", "Long", stop=sl, limit=tp)
+if strategy.position_size == 0
+    if armLong
+        pendSLlong := legLo - slBufTicks * syminfo.mintick
+        pendTPlong := limitLong + (limitLong - pendSLlong) * rr
+        strategy.entry("Long", strategy.long, limit=limitLong)
+    else
+        strategy.cancel("Long")
+    if armShort
+        pendSLshort := legHi + slBufTicks * syminfo.mintick
+        pendTPshort := limitShort - (pendSLshort - limitShort) * rr
+        strategy.entry("Short", strategy.short, limit=limitShort)
+    else
+        strategy.cancel("Short")
+
+// Keep the protective exits active for as long as the position is open.
+if strategy.position_size > 0
+    strategy.exit("Long exit", "Long", stop=pendSLlong, limit=pendTPlong)
+if strategy.position_size < 0
+    strategy.exit("Short exit", "Short", stop=pendSLshort, limit=pendTPshort)
+
+// Fire the alert / lock the leg only when the limit actually fills.
+filledLong  = strategy.position_size > 0 and strategy.position_size[1] <= 0
+filledShort = strategy.position_size < 0 and strategy.position_size[1] >= 0
+if filledLong
     entered := true
-    alert('{"strategy":"ICC-OTE-MTF","ticker":"' + syminfo.tickerid + '","action":"buy","price":' + str.tostring(entryP) + ',"sl":' + str.tostring(sl) + ',"tp":' + str.tostring(tp) + ',"bias":"1D+4H bull","tf":"' + timeframe.period + '"}', alert.freq_once_per_bar)
-
-if shortSig
-    entryP = close
-    sl     = legHi + slBufTicks * syminfo.mintick
-    risk   = sl - entryP
-    tp     = entryP - risk * rr
-    strategy.entry("Short", strategy.short)
-    strategy.exit("Short exit", "Short", stop=sl, limit=tp)
+    alert('{"strategy":"ICC-OTE-MTF","ticker":"' + syminfo.tickerid + '","action":"buy","price":' + str.tostring(strategy.position_avg_price) + ',"bias":"1D+4H bull","tf":"' + timeframe.period + '"}', alert.freq_once_per_bar)
+if filledShort
     entered := true
-    alert('{"strategy":"ICC-OTE-MTF","ticker":"' + syminfo.tickerid + '","action":"sell","price":' + str.tostring(entryP) + ',"sl":' + str.tostring(sl) + ',"tp":' + str.tostring(tp) + ',"bias":"1D+4H bear","tf":"' + timeframe.period + '"}', alert.freq_once_per_bar)
+    alert('{"strategy":"ICC-OTE-MTF","ticker":"' + syminfo.tickerid + '","action":"sell","price":' + str.tostring(strategy.position_avg_price) + ',"bias":"1D+4H bear","tf":"' + timeframe.period + '"}', alert.freq_once_per_bar)
 
 // ------------------------------- Markup --------------------------------------
 zoneCol = dir == 1 ? color.new(color.teal, 80) : dir == -1 ? color.new(color.red, 80) : na
@@ -214,8 +237,9 @@ if showOB and bullFVG and not na(bullOBlo)
 if showOB and bearFVG and not na(bearOBlo)
     box.new(bar_index - 3, bearOBhi, bar_index + 3, bearOBlo, border_color=color.new(color.maroon, 20), bgcolor=color.new(color.maroon, 85))
 
-plotshape(longSig,  title="Long entry",  style=shape.labelup,   location=location.belowbar, color=color.teal, text="ICC▲", textcolor=color.white, size=size.small)
-plotshape(shortSig, title="Short entry", style=shape.labeldown, location=location.abovebar, color=color.red,  text="ICC▼", textcolor=color.white, size=size.small)
+plot(showZone and dir != 0 ? (dir == 1 ? limitLong : limitShort) : na, "Limit entry", color=color.new(color.fuchsia, 0), style=plot.style_linebr, linewidth=2)
+plotshape(filledLong,  title="Long fill",  style=shape.labelup,   location=location.belowbar, color=color.teal, text="ICC▲", textcolor=color.white, size=size.small)
+plotshape(filledShort, title="Short fill", style=shape.labeldown, location=location.abovebar, color=color.red,  text="ICC▼", textcolor=color.white, size=size.small)
 plotchar(useSweep and bullSweep, title="Bull sweep", char="⨯", location=location.belowbar, color=color.new(color.teal, 0), size=size.tiny)
 plotchar(useSweep and bearSweep, title="Bear sweep", char="⨯", location=location.abovebar, color=color.new(color.red, 0),  size=size.tiny)
 
