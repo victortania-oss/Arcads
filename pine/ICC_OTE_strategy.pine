@@ -18,8 +18,8 @@ strategy(
      shorttitle        = "ICC-OTE MTF",
      overlay           = true,
      initial_capital   = 10000,
-     default_qty_type  = strategy.percent_of_equity,
-     default_qty_value = 10,
+     default_qty_type  = strategy.fixed,
+     default_qty_value = 1,
      commission_type   = strategy.commission.percent,
      commission_value  = 0.02,
      slippage          = 1,
@@ -60,18 +60,28 @@ sweepWindow  = input.int(10, "Sweep valid for N bars", minval=1, group=grpLiq,
      tooltip="How recently the sweep must have happened for the entry to still count.")
 
 grpRisk    = "④ Risk / Continuation"
+riskPct    = input.float(1.0, "Risk per trade (% of equity)", minval=0.05, maxval=100, step=0.1, group=grpRisk,
+     tooltip="Position size is calculated so a full stop-out loses this % of account equity. Default 1%.")
+roundContr = input.bool(true, "Round size to whole contracts", group=grpRisk,
+     tooltip="On for futures (MNQ/MES) — sizes down to whole contracts. Off for crypto/forex where fractional size is allowed.")
+minRR      = input.float(2.0, "Minimum R:R (skip if runner target < this)", minval=0.5, step=0.1, group=grpRisk,
+     tooltip="Only take a setup if the final (runner) target is at least this multiple of risk. Default 2:1.")
+maxTrades  = input.int(2, "Max trades per day", minval=1, maxval=20, group=grpRisk,
+     tooltip="Stop taking new entries once this many have filled today. Resets each new day.")
 slBufTicks = input.float(4, "Stop buffer (ticks beyond leg)", minval=0, group=grpRisk)
 numTPs     = input.int(3, "Take-profit tranches", minval=1, maxval=3, group=grpRisk,
      tooltip="Scale out over 1–3 targets. With 3, the final tranche runs risk-free after break-even.")
 tp1R       = input.float(1.0, "TP1 (R)", minval=0.1, step=0.1, group=grpRisk)
 tp2R       = input.float(2.0, "TP2 (R)", minval=0.1, step=0.1, group=grpRisk)
-tp3R       = input.float(3.0, "TP3 (R)", minval=0.1, step=0.1, group=grpRisk)
+tp3R       = input.float(4.0, "TP3 (R) — runner", minval=0.1, step=0.1, group=grpRisk)
 tp1pct     = input.float(50, "Close at TP1 (%)", minval=0, maxval=100, step=5, group=grpRisk)
 tp2pct     = input.float(30, "Close at TP2 (%)", minval=0, maxval=100, step=5, group=grpRisk,
      tooltip="TP3 closes whatever remains (100 − TP1% − TP2%).")
 moveBE     = input.bool(true, "Move stop to break-even after TP1", group=grpRisk)
 beOffTicks = input.float(0, "Break-even offset (ticks)", minval=0, group=grpRisk,
      tooltip="Nudge the break-even stop past entry to cover commissions/slippage, so the runner is truly risk-free.")
+trailTP2   = input.bool(true, "Trail stop up to TP1 after TP2 hits", group=grpRisk,
+     tooltip="After TP2 fills, lock in profit by moving the stop up to the TP1 price on the remaining runner.")
 
 grpDir  = "⑤ Direction"
 allowLong  = input.bool(true, "Allow longs",  group=grpDir)
@@ -137,6 +147,10 @@ entryFib   = entryLevelStr == "0.62 (shallow)" ? fibLow : entryLevelStr == "0.79
 limitLong  = na(rng) ? na : legHi - rng * entryFib
 limitShort = na(rng) ? na : legLo + rng * entryFib
 
+// Runner target multiple and the minimum-R:R gate.
+lastR = numTPs == 1 ? tp1R : numTPs == 2 ? tp2R : tp3R
+rrOK  = lastR >= minRR
+
 // Reset the "already entered this leg" flag whenever the HTF leg changes.
 var bool  entered   = false
 var float prevLegHi = na
@@ -184,11 +198,24 @@ hasBullSweep = ta.barssince(bullSweep) <= sweepWindow
 hasBearSweep = ta.barssince(bearSweep) <= sweepWindow
 
 // ------------------------------- Entries -------------------------------------
-// Setup is "armed" once bias aligns and confluence holds. While armed and flat, a
-// resting LIMIT order sits at the chosen OTE level — it fills only if price trades
-// into the zone (authentic OTE), otherwise it's cancelled when the setup dies.
-armLong  = allowLong  and dir == 1  and not entered and not na(limitLong)  and close > legLo and (not useFVG or hasBullFVG) and (not useSweep or hasBullSweep)
-armShort = allowShort and dir == -1 and not entered and not na(limitShort) and close < legHi and (not useFVG or hasBearFVG) and (not useSweep or hasBearSweep)
+// Daily trade cap — reset the counter each new calendar day (exchange time).
+var int tradesToday = 0
+if ta.change(time("D")) != 0
+    tradesToday := 0
+underCap = tradesToday < maxTrades
+
+// Setup is "armed" once bias aligns, confluence holds, the R:R gate passes, and we're
+// still under the daily cap. While armed and flat, a resting LIMIT order sits at the
+// chosen OTE level — it fills only if price trades into the zone (authentic OTE).
+armLong  = allowLong  and dir == 1  and not entered and rrOK and underCap and not na(limitLong)  and close > legLo and (not useFVG or hasBullFVG) and (not useSweep or hasBullSweep)
+armShort = allowShort and dir == -1 and not entered and rrOK and underCap and not na(limitShort) and close < legHi and (not useFVG or hasBearFVG) and (not useSweep or hasBearSweep)
+
+// Position size from fixed-fractional risk: a full stop-out loses riskPct of equity.
+// qty = (equity * riskPct%) / (stop distance in price * currency value per point).
+f_qty(_limit, _sl) =>
+    dist = math.abs(_limit - _sl)
+    raw  = dist > 0 and syminfo.pointvalue > 0 ? (strategy.equity * riskPct / 100.0) / (dist * syminfo.pointvalue) : 0.0
+    roundContr ? math.floor(raw) : raw
 
 // Stored stop for the pending (or open) trade.
 var float pendSLlong  = na
@@ -196,13 +223,23 @@ var float pendSLshort = na
 
 if strategy.position_size == 0
     if armLong
-        pendSLlong := legLo - slBufTicks * syminfo.mintick
-        strategy.entry("Long", strategy.long, limit=limitLong)
+        slPx  = legLo - slBufTicks * syminfo.mintick
+        qtyL  = f_qty(limitLong, slPx)
+        if qtyL > 0
+            pendSLlong := slPx
+            strategy.entry("Long", strategy.long, qty=qtyL, limit=limitLong)
+        else
+            strategy.cancel("Long")
     else
         strategy.cancel("Long")
     if armShort
-        pendSLshort := legHi + slBufTicks * syminfo.mintick
-        strategy.entry("Short", strategy.short, limit=limitShort)
+        slPx  = legHi + slBufTicks * syminfo.mintick
+        qtyS  = f_qty(limitShort, slPx)
+        if qtyS > 0
+            pendSLshort := slPx
+            strategy.entry("Short", strategy.short, qty=qtyS, limit=limitShort)
+        else
+            strategy.cancel("Short")
     else
         strategy.cancel("Short")
 
@@ -219,17 +256,18 @@ if filledLong
     riskPx   := entryPx - pendSLlong
     initSize := math.abs(strategy.position_size)
     entered  := true
+    tradesToday += 1
     alert('{"strategy":"ICC-OTE-MTF","ticker":"' + syminfo.tickerid + '","action":"buy","price":' + str.tostring(entryPx) + ',"sl":' + str.tostring(pendSLlong) + ',"tp1":' + str.tostring(entryPx + riskPx * tp1R) + ',"tp2":' + str.tostring(entryPx + riskPx * tp2R) + ',"tp3":' + str.tostring(entryPx + riskPx * tp3R) + ',"bias":"1D+4H bull","tf":"' + timeframe.period + '"}', alert.freq_once_per_bar)
 if filledShort
     entryPx  := strategy.position_avg_price
     riskPx   := pendSLshort - entryPx
     initSize := math.abs(strategy.position_size)
     entered  := true
+    tradesToday += 1
     alert('{"strategy":"ICC-OTE-MTF","ticker":"' + syminfo.tickerid + '","action":"sell","price":' + str.tostring(entryPx) + ',"sl":' + str.tostring(pendSLshort) + ',"tp1":' + str.tostring(entryPx - riskPx * tp1R) + ',"tp2":' + str.tostring(entryPx - riskPx * tp2R) + ',"tp3":' + str.tostring(entryPx - riskPx * tp3R) + ',"bias":"1D+4H bear","tf":"' + timeframe.period + '"}', alert.freq_once_per_bar)
 
 // -------------------- Scaled take-profit + break-even ------------------------
 // TP prices from the per-unit risk. The last active tranche is the "runner".
-lastR   = numTPs == 1 ? tp1R : numTPs == 2 ? tp2R : tp3R
 tp1Long = na(entryPx) ? na : entryPx + riskPx * tp1R
 tp2Long = na(entryPx) ? na : entryPx + riskPx * tp2R
 runLong = na(entryPx) ? na : entryPx + riskPx * lastR
@@ -252,11 +290,13 @@ if strategy.position_size < 0 and not na(tp1Short) and low <= tp1Short
 if strategy.position_size < 0 and numTPs >= 3 and not na(tp2Short) and low <= tp2Short
     tp2hit := true
 
-// Once TP1 prints, the stop jumps to break-even (± offset) — the runner is risk-free.
+// Staged stop protection:
+//   after TP1  -> break-even (± offset), the runner is risk-free
+//   after TP2  -> trail up to the TP1 price, locking in profit on the runner
 beLong  = entryPx + beOffTicks * syminfo.mintick
 beShort = entryPx - beOffTicks * syminfo.mintick
-curStopLong  = tp1hit and moveBE ? beLong  : pendSLlong
-curStopShort = tp1hit and moveBE ? beShort : pendSLshort
+curStopLong  = tp2hit and trailTP2 ? tp1Long  : tp1hit and moveBE ? beLong  : pendSLlong
+curStopShort = tp2hit and trailTP2 ? tp1Short : tp1hit and moveBE ? beShort : pendSLshort
 
 q1 = initSize * tp1pct / 100.0
 q2 = initSize * tp2pct / 100.0
@@ -320,7 +360,7 @@ plotchar(useSweep and bearSweep, title="Bear sweep", char="⨯", location=locati
 f_arrow(b) => b == 1 ? "▲ Bull" : b == -1 ? "▼ Bear" : "– None"
 f_col(b)   => b == 1 ? color.teal : b == -1 ? color.red : color.gray
 if showTable and barstate.islast
-    var table t = table.new(position.top_right, 2, 4, border_width=1)
+    var table t = table.new(position.top_right, 2, 5, border_width=1)
     table.cell(t, 0, 0, "Bias " + tfBias,    text_color=color.white, bgcolor=color.new(color.black, 30))
     table.cell(t, 1, 0, f_arrow(biasD),       text_color=f_col(biasD), bgcolor=color.new(color.black, 30))
     table.cell(t, 0, 1, "Confirm " + tfConfirm, text_color=color.white, bgcolor=color.new(color.black, 30))
@@ -329,3 +369,5 @@ if showTable and barstate.islast
     table.cell(t, 1, 2, aligned ? "YES" : "no", text_color=aligned ? color.teal : color.gray, bgcolor=color.new(color.black, 30))
     table.cell(t, 0, 3, "Setup",              text_color=color.white, bgcolor=color.new(color.black, 30))
     table.cell(t, 1, 3, dir == 1 ? "LONG" : dir == -1 ? "SHORT" : "wait", text_color=f_col(dir), bgcolor=color.new(color.black, 30))
+    table.cell(t, 0, 4, "Trades today",       text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(t, 1, 4, str.tostring(tradesToday) + " / " + str.tostring(maxTrades), text_color=underCap ? color.teal : color.orange, bgcolor=color.new(color.black, 30))

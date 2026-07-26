@@ -59,9 +59,32 @@ The bot draws the **OTE zone** on the aligned 4H leg using Fibonacci:
 two, or 3 for the full risk-free-runner model. The webhook alert JSON carries `sl`,
 `tp1`, `tp2`, `tp3` so an execution bridge can replicate the same scaling live.
 
+## Risk model (position sizing + limits)
+
+The strategy sizes and gates every trade to a fixed risk profile:
+
+- **1% risk per trade (auto-sizing).** Position size is *calculated*, not fixed: the bot
+  works out how many contracts make a full stop-out cost exactly **1% of account equity**
+  (`Risk per trade (%)`). Wider stop → fewer contracts; tighter stop → more. Turn on
+  *Round size to whole contracts* for futures (MNQ/MES); off for crypto/forex where
+  fractional size is fine. If 1% risk can't fund even one contract, the trade is skipped
+  rather than over-risked.
+- **Minimum R:R gate (2:1).** A setup is only taken if the **runner target ≥ Minimum R:R**
+  (default 2.0). Since the runner defaults to 4R, this passes normally — but if you tighten
+  the targets below 2R, the bot stands down instead of taking a sub-2:1 trade.
+- **Max trades per day (1–2).** Once `Max trades per day` entries have filled, no new
+  entries fire until the next day. The chart table shows **Trades today: n / max**.
+- **Staged stop protection.**
+  - After **TP1** → stop to **break-even** (risk-free runner).
+  - After **TP2** → stop trails up to the **TP1 price**, locking in profit on the runner
+    (toggle: *Trail stop up to TP1 after TP2*).
+  - With a **higher TP3** (default 4R) the runner has room to reach for the big move while
+    your downside is already removed.
+
 > **Futures sizing note:** tranche percentages split the position by contract count. For
 > MNQ/MES, size so the splits land on **whole contracts** (e.g. 4 contracts → 50/25/25),
-> otherwise the backtester rounds fractional lots.
+> otherwise the backtester rounds fractional lots. Also sanity-check `syminfo.pointvalue`
+> for your symbol — the 1% sizing depends on it, and CFD/forex feeds vary.
 
 ## Liquidity sweep filter (optional ICT refinement)
 
@@ -91,11 +114,16 @@ to improve entry quality — backtest it on/off per symbol.
 | Require 1H FVG confluence | Only enter with displacement | On |
 | Require liquidity sweep | Demand a stop raid first | Off (test per symbol) |
 | Minor swing lookback (1H) | Significance of swept level | 3 |
+| Risk per trade (%) | Equity risked on a full stop-out | 1.0 |
+| Round size to whole contracts | Futures on, crypto/forex off | On |
+| Minimum R:R | Skip if runner target below this | 2.0 |
+| Max trades per day | Daily entry cap | 2 |
 | Stop buffer (ticks) | Padding beyond the swing | see presets |
 | Take-profit tranches | How many scale-out targets | 3 |
-| TP1 / TP2 / TP3 (R) | Target distances in R | 1 / 2 / 3 |
+| TP1 / TP2 / TP3 (R) | Target distances in R | 1 / 2 / 4 |
 | Close at TP1 / TP2 (%) | Portion exited at each | 50 / 30 (rest at TP3) |
 | Move stop to break-even after TP1 | Risk-free runner | On |
+| Trail stop up to TP1 after TP2 | Lock profit on runner | On |
 | Break-even offset (ticks) | Cover fees past entry | 0 |
 
 ## Per-market presets (starting points)
@@ -112,9 +140,11 @@ Copy these into the inputs, then backtest and adjust. "Stop buffer" is in **tick
 | Require liquidity sweep | Optional | Optional | **On** (gold loves stop raids) | Optional |
 | Minor swing lookback | 3 | 3 | 3–4 | 3 |
 | Stop buffer (ticks) | 8 (≈2.0 pts) | 8 (≈2.0 pts) | 20 (≈$2.00) | 10 |
-| TP tranches (R) | 1 / 2 / 3 | 1 / 2 / 3 | 1 / 2 / 3 | 1 / 2.5 / 4 |
+| Risk per trade | 1% | 1% | 1% | 1% |
+| TP tranches (R) | 1 / 2 / 4 | 1 / 2 / 4 | 1 / 2 / 4 | 1 / 2.5 / 5 |
 | Close % at TP1 / TP2 | 50 / 30 | 50 / 30 | 50 / 25 | 40 / 30 |
 | Break-even after TP1 | On | On | On | On |
+| Max trades/day | 2 | 2 | 2 | 2 |
 
 Rationale:
 - **XAUUSD** wicks aggressively and raids liquidity often → wider stop buffer, a higher
