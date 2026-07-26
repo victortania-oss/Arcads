@@ -1,11 +1,13 @@
 # ICC + OTE TradingView Bot
 
-A trading bot built around the **ICC** strategy — *Indication · Correction ·
-Continuation* (Trades by Sci) — blended with **ICT** concepts (Fair Value Gaps,
-Order Blocks) and the **OTE** (Optimal Trade Entry) Fibonacci zone.
+A **top-down, multi-timeframe** trading bot built around the **ICC** strategy —
+*Indication · Correction · Continuation* (Trades by Sci) — blended with **ICT**
+concepts (Fair Value Gaps, Order Blocks) and the **OTE** (Optimal Trade Entry)
+Fibonacci zone.
 
-It works on any TradingView symbol and is tuned for **MNQ1!, MES1!, XAUUSD, and
-crypto**.
+Apply it on your **1H chart**: it reads **1D** structure for bias, requires the **4H**
+to agree, marks up the **OTE / FVG / order-block** confluence, and enters on the 1H.
+Tuned for **MNQ1!, MES1!, XAUUSD, and crypto**.
 
 > ⚠️ Educational template, **not financial advice**. Trading is risky — read
 > [`docs/RISK.md`](docs/RISK.md) before using real money.
@@ -21,23 +23,26 @@ crypto**.
 | [`docs/SETUP.md`](docs/SETUP.md) | Step-by-step setup (TradingView first, automation later). |
 | [`docs/RISK.md`](docs/RISK.md) | Risk disclaimer. |
 
-## How it trades
+## How it trades (top-down)
 
-1. **Indication** — a break of structure (higher-high / lower-low swing) signals
-   institutional intent, optionally confirmed by a Fair Value Gap.
-2. **Correction** — price retraces into the **0.62–0.79 OTE zone** of the indication
-   leg. That touch is the entry.
-3. **Continuation** — stop sits beyond the leg origin; target is a configurable
-   R-multiple (default 2.5R) as price continues toward liquidity.
+| Step | Timeframe | What the bot does |
+|---|---|---|
+| **Bias** | 1D | Reads daily structure (BOS) to set direction |
+| **Confirm** | 4H | Requires 4H structure to **match** the 1D bias, else no trade |
+| **Markup** | 4H leg | Draws the **0.62–0.79 OTE zone** + highs/lows |
+| **Confluence** | 1H | Boxes the **FVG** and **order block** |
+| **Entry** | 1H | Fires on the OTE tap, in the aligned direction |
 
-Full detail in [`docs/ICC_STRATEGY.md`](docs/ICC_STRATEGY.md).
+Stop sits beyond the leg origin; target is a configurable R-multiple (default 2.5R).
+A bias table on the chart shows 1D/4H alignment and the live setup. Full detail in
+[`docs/ICC_STRATEGY.md`](docs/ICC_STRATEGY.md).
 
 ## Quick start
 
-1. **Load it:** paste `pine/ICC_OTE_strategy.pine` into the TradingView Pine Editor
-   → *Add to chart* → check the **Strategy Tester**.
+1. **Load it:** open your **1H chart**, paste `pine/ICC_OTE_strategy.pine` into the
+   TradingView Pine Editor → *Add to chart* → check the **Strategy Tester**.
 2. **Alert it:** create an alert on *"Any alert() function call"* — get notified (or
-   trade manually) on every ICC signal.
+   trade manually) whenever 1D+4H align and price taps the OTE zone.
 3. **Automate it (optional):** run the webhook bridge in `webhook/` (starts in paper
    mode) and, when ready, wire crypto execution or a futures bridge.
 

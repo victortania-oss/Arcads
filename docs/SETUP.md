@@ -8,16 +8,19 @@ webhook bridge for auto-execution.
 ## A. TradingView (start here)
 
 ### 1. Add the script
-1. Open TradingView → **Pine Editor** (bottom panel).
-2. Paste the contents of **`pine/ICC_OTE_strategy.pine`** (backtest + alerts) or
+1. Open your **1H chart** for the symbol (MNQ1!, MES1!, XAUUSD, BTCUSD…). This is the
+   entry timeframe — the script reads 1D + 4H structure for you via `request.security`.
+2. Open TradingView → **Pine Editor** (bottom panel).
+3. Paste the contents of **`pine/ICC_OTE_strategy.pine`** (backtest + alerts) or
    **`pine/ICC_OTE_indicator.pine`** (alerts only).
-3. Click **Add to chart**.
+4. Click **Add to chart**. The **bias table** (top-right) shows 1D bias, 4H bias,
+   whether they're aligned, and the current setup.
 
 ### 2. Backtest it
-- Open the **Strategy Tester** tab. Review net profit, win rate, max drawdown, and
-  the list of trades. Do this on **each symbol and timeframe** you trade
-  (MNQ1!, MES1!, XAUUSD, BTCUSD…).
-- Tune the inputs (gear icon) per `docs/ICC_STRATEGY.md`.
+- Keep the chart on **1H** and open the **Strategy Tester** tab. Review net profit,
+  win rate, max drawdown, and the trade list. Repeat for each symbol you trade.
+- Adjust the **Bias / Confirmation** timeframes and other inputs (gear icon) per
+  `docs/ICC_STRATEGY.md` — defaults are 1D bias / 4H confirm / 1H entry.
 
 > ⚠️ Backtest results are historical and *not* a promise of future results. The
 > strategy uses `process_orders_on_close=true` to avoid look-ahead bias, but always
