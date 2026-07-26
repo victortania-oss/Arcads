@@ -33,8 +33,10 @@ Tuned for **MNQ1!, MES1!, XAUUSD, and crypto**.
 | **Confluence** | 1H | Boxes the **FVG** and **order block** |
 | **Entry** | 1H | Fires on the OTE tap, in the aligned direction |
 
-Stop sits beyond the leg origin; target is a configurable R-multiple (default 2.5R).
-A bias table on the chart shows 1D/4H alignment and the live setup. Full detail in
+Entries are **limit orders at the OTE level**; the stop sits beyond the leg origin.
+Take-profit **scales over up to 3 tranches (1R/2R/3R)** and the stop moves to
+**break-even after TP1**, so the runner rides risk-free. A bias table on the chart
+shows 1D/4H alignment and the live setup. Full detail in
 [`docs/ICC_STRATEGY.md`](docs/ICC_STRATEGY.md).
 
 ## Quick start

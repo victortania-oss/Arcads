@@ -43,10 +43,25 @@ The bot draws the **OTE zone** on the aligned 4H leg using Fibonacci:
   entry and makes the backtest honest (no filling at a worse "market" price). If price
   breaks the leg origin before reaching the level, the setup is **invalidated**.
 
-### 3. Continuation
+### 3. Continuation (scaled exits + break-even)
 - **Stop** sits just beyond the leg origin (the 1.0 Fib), plus a small tick buffer.
-- **Target** is a configurable **R multiple** (default 2.5R) as price continues toward
-  liquidity beyond the indication swing.
+- **Take-profit is scaled over up to 3 tranches** (R-multiples of the stop distance,
+  defaults **1R / 2R / 3R**). You choose what % closes at TP1 and TP2 (default 50% /
+  30%); TP3 — the **runner** — closes the remainder.
+- **Break-even after TP1:** the moment price prints TP1, the stop jumps to your entry
+  (plus an optional tick offset to cover fees). From there the runner is a **risk-free
+  trade** — exactly the "third level is basically risk-free" management. Turn it off with
+  *Move stop to break-even after TP1*.
+- On the chart while in a trade: **green lines** mark TP1/TP2/TP3 and the **stop line**
+  turns from red to **yellow** once it's at break-even.
+
+**Reading the tranches:** set *Take-profit tranches* to 1 for a single target, 2 for
+two, or 3 for the full risk-free-runner model. The webhook alert JSON carries `sl`,
+`tp1`, `tp2`, `tp3` so an execution bridge can replicate the same scaling live.
+
+> **Futures sizing note:** tranche percentages split the position by contract count. For
+> MNQ/MES, size so the splits land on **whole contracts** (e.g. 4 contracts → 50/25/25),
+> otherwise the backtester rounds fractional lots.
 
 ## Liquidity sweep filter (optional ICT refinement)
 
@@ -77,7 +92,11 @@ to improve entry quality — backtest it on/off per symbol.
 | Require liquidity sweep | Demand a stop raid first | Off (test per symbol) |
 | Minor swing lookback (1H) | Significance of swept level | 3 |
 | Stop buffer (ticks) | Padding beyond the swing | see presets |
-| Target (R multiple) | Reward vs. risk | 2.0–3.0 |
+| Take-profit tranches | How many scale-out targets | 3 |
+| TP1 / TP2 / TP3 (R) | Target distances in R | 1 / 2 / 3 |
+| Close at TP1 / TP2 (%) | Portion exited at each | 50 / 30 (rest at TP3) |
+| Move stop to break-even after TP1 | Risk-free runner | On |
+| Break-even offset (ticks) | Cover fees past entry | 0 |
 
 ## Per-market presets (starting points)
 
@@ -93,7 +112,9 @@ Copy these into the inputs, then backtest and adjust. "Stop buffer" is in **tick
 | Require liquidity sweep | Optional | Optional | **On** (gold loves stop raids) | Optional |
 | Minor swing lookback | 3 | 3 | 3–4 | 3 |
 | Stop buffer (ticks) | 8 (≈2.0 pts) | 8 (≈2.0 pts) | 20 (≈$2.00) | 10 |
-| Target (R multiple) | 2.5 | 2.5 | 2.0–2.5 | 3.0 |
+| TP tranches (R) | 1 / 2 / 3 | 1 / 2 / 3 | 1 / 2 / 3 | 1 / 2.5 / 4 |
+| Close % at TP1 / TP2 | 50 / 30 | 50 / 30 | 50 / 25 | 40 / 30 |
+| Break-even after TP1 | On | On | On | On |
 
 Rationale:
 - **XAUUSD** wicks aggressively and raids liquidity often → wider stop buffer, a higher

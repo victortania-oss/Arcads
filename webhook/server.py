@@ -100,7 +100,11 @@ async def webhook(request: Request) -> dict[str, Any]:
         "action": action,
         "price": body.get("price"),
         "sl": body.get("sl"),
+        # Single target (legacy) plus scaled tranches from the MTF strategy.
         "tp": body.get("tp"),
+        "tp1": body.get("tp1"),
+        "tp2": body.get("tp2"),
+        "tp3": body.get("tp3"),
         "tf": body.get("tf"),
         "strategy": body.get("strategy", "ICC-OTE"),
         "received_at": datetime.now(timezone.utc).isoformat(),
