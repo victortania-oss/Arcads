@@ -33,11 +33,13 @@ Tuned for **MNQ1!, MES1!, XAUUSD, and crypto**.
 | **Confluence** | 1H | Boxes the **FVG** and **order block** |
 | **Entry** | 1H | Fires on the OTE tap, in the aligned direction |
 
-Entries are **limit orders at the OTE level**, auto-sized to risk **1% of equity** per
-trade, gated to a **minimum 2:1 R:R** and a **max of 1–2 trades/day**. Take-profit
-**scales over up to 3 tranches (1R/2R/4R)**; the stop moves to **break-even after TP1**
-and **trails up to TP1 after TP2**, so the runner rides risk-free. A bias table on the
-chart shows 1D/4H alignment, the live setup, and trades-used-today. Full detail in
+Entries fire **only in the London / NY kill zones** (NY emphasised for volume) and only
+when a **volume-weighted confluence score** clears a quality bar. They're **limit orders
+at the OTE level**, auto-sized to risk **1% of equity**, gated to a **minimum 2:1 R:R**
+and a **max of 1–2 trades/day**. Take-profit **scales over up to 3 tranches (1R/2R/4R)**;
+the stop moves to **break-even after TP1** and **trails up to TP1 after TP2**, so the
+runner rides risk-free. A chart table shows 1D/4H alignment, session, confluence score,
+the live setup, and trades-used-today. Full detail in
 [`docs/ICC_STRATEGY.md`](docs/ICC_STRATEGY.md).
 
 ## Quick start

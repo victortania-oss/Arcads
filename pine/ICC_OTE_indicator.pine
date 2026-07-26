@@ -24,6 +24,15 @@ sweepPivotLen = input.int(3,  "Minor swing lookback (1H)", minval=1)
 sweepWindow   = input.int(10, "Sweep valid for N bars", minval=1)
 allowLong  = input.bool(true, "Allow longs")
 allowShort = input.bool(true, "Allow shorts")
+volLen     = input.int(20, "Volume average length", minval=1)
+volMult    = input.float(1.0, "Volume threshold (× average)", minval=0.1, step=0.1)
+requireVol = input.bool(false, "Require above-average volume (hard filter)")
+minConfl   = input.int(2, "Minimum confluences to trade", minval=0, maxval=5)
+useSessions = input.bool(true, "Trade only London / NY")
+sessTZ      = input.string("America/New_York", "Session timezone")
+londonSess  = input.session("0200-0500", "London kill zone")
+nySess      = input.session("0700-1000", "New York kill zone")
+emphasizeNY = input.bool(true, "Emphasize NY (stricter filter in London)")
 showZone  = input.bool(true, "Show OTE zone + Fib")
 showFVG   = input.bool(true, "Show 1H FVG box")
 showOB    = input.bool(true, "Show 1H order block")
@@ -120,13 +129,26 @@ bearSweep = not na(lastMinorHigh) and high > lastMinorHigh and close < lastMinor
 hasBullSweep = ta.barssince(bullSweep) <= sweepWindow
 hasBearSweep = ta.barssince(bearSweep) <= sweepWindow
 
+// ---------------------- Sessions + volume confluence -------------------------
+inLondon  = not na(time(timeframe.period, londonSess, sessTZ))
+inNY      = not na(time(timeframe.period, nySess, sessTZ))
+inSession = not useSessions or inLondon or inNY
+
+volAvg   = ta.sma(volume, volLen)
+volOK    = volume > volAvg * volMult
+inBullOB = not na(bullOBlo) and low  <= bullOBhi and low  >= bullOBlo
+inBearOB = not na(bearOBlo) and high >= bearOBlo and high <= bearOBhi
+bullConfl = (hasBullFVG ? 1 : 0) + (inBullOB ? 1 : 0) + (hasBullSweep ? 1 : 0) + (volOK ? 2 : 0)
+bearConfl = (hasBearFVG ? 1 : 0) + (inBearOB ? 1 : 0) + (hasBearSweep ? 1 : 0) + (volOK ? 2 : 0)
+reqConfl  = useSessions and emphasizeNY and inLondon and not inNY ? minConfl + 1 : minConfl
+
 // ------------------------------- Signals -------------------------------------
 // Alert fires the first time price reaches the chosen OTE entry level (where the
-// strategy's limit order would fill), with bias + confluence confirmed.
+// strategy's limit order would fill), with bias + session + confluence confirmed.
 inZoneLong  = dir == 1  and not na(limitLong)  and low  <= limitLong  and low  > legLo
 inZoneShort = dir == -1 and not na(limitShort) and high >= limitShort and high < legHi
-longSig  = allowLong  and inZoneLong  and (not useFVG or hasBullFVG) and (not useSweep or hasBullSweep) and not entered
-shortSig = allowShort and inZoneShort and (not useFVG or hasBearFVG) and (not useSweep or hasBearSweep) and not entered
+longSig  = allowLong  and inZoneLong  and inSession and (not requireVol or volOK) and bullConfl >= reqConfl and (not useFVG or hasBullFVG) and (not useSweep or hasBullSweep) and not entered
+shortSig = allowShort and inZoneShort and inSession and (not requireVol or volOK) and bearConfl >= reqConfl and (not useFVG or hasBearFVG) and (not useSweep or hasBearSweep) and not entered
 if longSig or shortSig
     entered := true
 

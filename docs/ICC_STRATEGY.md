@@ -101,6 +101,37 @@ Inputs: *Minor swing lookback (1H)* controls how significant the swept level mus
 (default 3); *Sweep valid for N bars* is the window. This filter cuts trades but tends
 to improve entry quality — backtest it on/off per symbol.
 
+## Sessions + confluence priority
+
+The bot trades **only the London and New York kill zones**, and prioritises the
+highest-quality setups — which matters because you're capped at 1–2 trades a day.
+
+- **Kill-zone gating.** With *Trade only London / NY* on, no entry fires outside the
+  **London (02:00–05:00)** or **New York (07:00–10:00)** windows. Times are read in the
+  *Session timezone* (default `America/New_York`) so they're the same regardless of the
+  symbol's exchange. Adjust the windows to your exact kill zones.
+- **NY emphasis.** With *Emphasize NY* on, London-only hours require **one extra
+  confluence** to trade, so the higher-volume NY session gets the lighter filter and the
+  priority.
+- **Confluence score (volume-weighted).** Every setup is scored:
+
+  | Confluence | Points |
+  |---|---|
+  | Fair Value Gap on the leg | 1 |
+  | Order-block retest (price in the OB) | 1 |
+  | Liquidity sweep before entry | 1 |
+  | **Above-average volume** | **2** (double-weighted) |
+
+  Only setups scoring **≥ Minimum confluences** (default 2) are taken. Volume counts
+  double, so a volume-backed setup clears the bar on its own — directly encoding
+  "prioritise trades where the confluences match, especially with volume." Set
+  *Require above-average volume* on to make volume mandatory rather than just weighted.
+- The chart table shows the live **Session**, the **Confluence** score vs. what's
+  required (with a ⚡ when volume is elevated), and trades used today.
+
+> Kill-zone defaults are the classic ICT windows. If you trade the NY afternoon or the
+> London open differently, widen/split the sessions to match your plan.
+
 ## Inputs cheat-sheet
 
 | Input | What it does | Typical |
@@ -114,6 +145,12 @@ to improve entry quality — backtest it on/off per symbol.
 | Require 1H FVG confluence | Only enter with displacement | On |
 | Require liquidity sweep | Demand a stop raid first | Off (test per symbol) |
 | Minor swing lookback (1H) | Significance of swept level | 3 |
+| Trade only London / NY | Kill-zone gating | On |
+| London / NY kill zone | Session windows (session TZ) | 0200–0500 / 0700–1000 |
+| Emphasize NY | Stricter confluence in London | On |
+| Volume threshold (× avg) | Bar volume to count as elevated | 1.0 |
+| Minimum confluences to trade | Quality gate (volume ×2) | 2 |
+| Require above-average volume | Make volume mandatory | Off |
 | Risk per trade (%) | Equity risked on a full stop-out | 1.0 |
 | Round size to whole contracts | Futures on, crypto/forex off | On |
 | Minimum R:R | Skip if runner target below this | 2.0 |
