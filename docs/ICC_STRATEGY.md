@@ -31,6 +31,33 @@ must confirm the same direction. This is your "structure on 1D, matches on 4H" s
 - Only when **1D and 4H agree** is a setup armed. This is the single biggest filter —
   it keeps you trading *with* the higher-timeframe order flow.
 
+### 2b. Golden pocket, Premium/Discount & confluence AT the pocket
+
+This is the heart of the entry model, and the bot now enforces it precisely — it will
+**not** enter just because confluences exist *nearby*; they must sit *in the pocket*, in
+the right half of the range:
+
+- **Golden pocket (0.618–0.65).** The default entry is the golden pocket, not the broad
+  OTE. It's drawn as a **yellow band**, with the resting limit order inside it.
+- **Premium / Discount (50% equilibrium).** The bot marks the **equilibrium** (50% of the
+  dealing range = the HTF leg, per your notes: swing-high→swing-low). **Longs only fire in
+  discount** (below equilibrium); **shorts only in premium** (above). Turn off with
+  *Require correct Premium/Discount*.
+- **Confluence AT the pocket (spatial, not just present).** With *Require a confluence at
+  the golden pocket* on, an entry needs the pocket to **overlap a confluence zone**:
+  - **Fair Value Gap** (the 3-candle imbalance band)
+  - **Inverse FVG** — an opposite-side FVG that got closed through and flipped to support/
+    resistance
+  - **Rejection block** — the *wick* left when price traded into a level and was rejected,
+    then displaced away (wick area, not the body — per your notes)
+  - **Order block** — the last opposite candle before displacement (strongest when paired
+    with a liquidity sweep)
+
+  The overlap is a true band-intersection test with a freshness window, so "the pocket
+  sits in an FVG / IFVG / OB / rejection block" is checked literally.
+- The chart table shows **P / D zone** (discount ✓ / premium ✓) and **Pocket conf**
+  (AT pocket ✓ / none) live, so you can see the setup qualify in real time.
+
 ### 2. Correction (markup + OTE)
 The bot draws the **OTE zone** on the aligned 4H leg using Fibonacci:
 - **Shallow edge = 0.62**, **deep edge = 0.79**, with the **0.705 sweet spot** plotted
@@ -141,7 +168,11 @@ highest-quality setups — which matters because you're capped at 1–2 trades a
 | Draw OTE / Fib on | Which HTF leg carries the zone | `Confirmation` (4H) |
 | Swing lookback | Strictness of HTF swing detection | 5 |
 | OTE shallow / deep | Fib edges of the entry zone | 0.62 / 0.79 |
-| Limit entry level | Fib level the resting order sits at | 0.705 (sweet spot) |
+| Limit entry level | Fib level the resting order sits at | 0.618 (golden pocket) |
+| Golden pocket shallow / deep | Pocket band edges | 0.618 / 0.65 |
+| Require correct Premium/Discount | Long in discount, short in premium | On |
+| Require a confluence at the golden pocket | Pocket must overlap FVG/IFVG/OB/rejection | On |
+| Confluence zone valid for N bars | Freshness of a confluence zone | 40 |
 | Require 1H FVG confluence | Only enter with displacement | On |
 | Require liquidity sweep | Demand a stop raid first | Off (test per symbol) |
 | Minor swing lookback (1H) | Significance of swept level | 3 |

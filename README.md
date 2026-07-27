@@ -29,9 +29,9 @@ Tuned for **MNQ1!, MES1!, XAUUSD, and crypto**.
 |---|---|---|
 | **Bias** | 1D | Reads daily structure (BOS) to set direction |
 | **Confirm** | 4H | Requires 4H structure to **match** the 1D bias, else no trade |
-| **Markup** | 4H leg | Draws the **0.62–0.79 OTE zone** + highs/lows |
-| **Confluence** | 1H | Boxes the **FVG** and **order block** |
-| **Entry** | 1H | Fires on the OTE tap, in the aligned direction |
+| **Markup** | 4H leg | Draws the OTE zone, **golden pocket (0.618–0.65)**, and 50% equilibrium |
+| **Confluence** | 1H | Requires the pocket to overlap an **FVG / inverse FVG / rejection block / order block**, in the correct **premium/discount** zone |
+| **Entry** | 1H | Golden-pocket limit fill, in the aligned direction |
 
 Entries fire **only in the London / NY kill zones** (NY emphasised for volume) and only
 when a **volume-weighted confluence score** clears a quality bar. They're **limit orders
