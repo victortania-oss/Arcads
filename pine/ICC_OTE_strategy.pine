@@ -44,8 +44,6 @@ pivotLen  = input.int(5, "Swing lookback (pivots)", minval=2, group=grpStruct,
      tooltip="Bars each side to confirm an HTF swing. Higher = fewer, stronger swings.")
 
 grpOte  = "③ OTE / Correction"
-fibLow  = input.float(0.62, "OTE shallow (fib)", minval=0.3, maxval=0.99, step=0.01, group=grpOte)
-fibHigh = input.float(0.79, "OTE deep (fib)",    minval=0.3, maxval=0.99, step=0.01, group=grpOte)
 useFVG  = input.bool(true,  "Require 1H Fair Value Gap confluence", group=grpOte,
      tooltip="Only enter when a fair value gap formed on the entry (chart) timeframe.")
 autoEntry  = input.bool(true, "Auto-pick shallowest entry meeting min R:R", group=grpOte,
@@ -167,8 +165,6 @@ legLo = useBiasLeg ? legLoD : legLo4
 
 // -------------------------- OTE zone (Correction) ----------------------------
 rng     = na(legHi) or na(legLo) ? na : legHi - legLo
-oteShal = na(rng) ? na : dir == 1 ? legHi - rng * fibLow : dir == -1 ? legLo + rng * fibLow : na
-oteDeep = na(rng) ? na : dir == 1 ? legHi - rng * fibHigh : dir == -1 ? legLo + rng * fibHigh : na
 oteMid  = na(rng) ? na : dir == 1 ? legHi - rng * 0.705   : dir == -1 ? legLo + rng * 0.705   : na
 
 // -------- Entry selection: shallowest OTE level that clears the min R:R -------
