@@ -18,11 +18,16 @@ pivotLen  = input.int(5, "Swing lookback (pivots)", minval=2)
 fibLow    = input.float(0.62, "OTE shallow (fib)", minval=0.3, maxval=0.99, step=0.01)
 fibHigh   = input.float(0.79, "OTE deep (fib)",    minval=0.3, maxval=0.99, step=0.01)
 useFVG    = input.bool(true,  "Require 1H FVG confluence")
-entryLevelStr = input.string("0.618 (golden pocket)", "Entry (alert) level", options=["0.618 (golden pocket)", "0.65 (golden pocket)", "0.705 (sweet spot)", "0.79 (deep)"])
-gpShal     = input.float(0.618, "Golden pocket shallow", minval=0.5, maxval=0.9, step=0.001)
-gpDeep     = input.float(0.65,  "Golden pocket deep",    minval=0.5, maxval=0.9, step=0.001)
+autoEntry  = input.bool(true, "Auto-pick shallowest entry meeting min R:R")
+fibA       = input.float(0.618, "Entry A — shallow", minval=0.4, maxval=0.95, step=0.001)
+fibB       = input.float(0.705, "Entry B — common",  minval=0.4, maxval=0.95, step=0.001)
+fibC       = input.float(0.786, "Entry C — deep",    minval=0.4, maxval=0.95, step=0.001)
+manualEntry = input.string("0.705 (B)", "Manual entry level (auto off)", options=["0.618 (A)", "0.705 (B)", "0.786 (C)"])
+minRR      = input.float(2.0, "Minimum R:R", minval=0.5, step=0.1)
+targetExt  = input.float(0.0, "R:R target beyond leg extreme (× leg)", minval=0.0, step=0.1)
+slBufTicks = input.float(4, "Stop buffer (ticks beyond leg)", minval=0)
 requirePD  = input.bool(true, "Require correct Premium/Discount")
-requirePocketConf = input.bool(true, "Require a confluence AT the golden pocket")
+requirePocketConf = input.bool(true, "Require a confluence AT the entry zone")
 confWin    = input.int(40, "Confluence zone valid for N bars", minval=5)
 useSweep      = input.bool(false, "Require liquidity sweep before entry")
 sweepPivotLen = input.int(3,  "Minor swing lookback (1H)", minval=1)
@@ -88,18 +93,33 @@ oteShal = na(rng) ? na : dir == 1 ? legHi - rng * fibLow : dir == -1 ? legLo + r
 oteDeep = na(rng) ? na : dir == 1 ? legHi - rng * fibHigh : dir == -1 ? legLo + rng * fibHigh : na
 oteMid  = na(rng) ? na : dir == 1 ? legHi - rng * 0.705   : dir == -1 ? legLo + rng * 0.705   : na
 
-entryFib   = entryLevelStr == "0.618 (golden pocket)" ? gpShal : entryLevelStr == "0.65 (golden pocket)" ? gpDeep : entryLevelStr == "0.79 (deep)" ? fibHigh : 0.705
-limitLong  = na(rng) ? na : legHi - rng * entryFib
-limitShort = na(rng) ? na : legLo + rng * entryFib
+// Entry selection: shallowest level that clears the min R:R to the target.
+equil       = na(rng) ? na : (legHi + legLo) / 2.0
+tgtLong     = na(rng) ? na : legHi + rng * targetExt
+tgtShort    = na(rng) ? na : legLo - rng * targetExt
+slBaseLong  = na(rng) ? na : legLo - slBufTicks * syminfo.mintick
+slBaseShort = na(rng) ? na : legHi + slBufTicks * syminfo.mintick
+f_rrLong(f) =>
+    e = legHi - rng * f
+    r = e - slBaseLong
+    r > 0 ? (tgtLong - e) / r : 0.0
+f_rrShort(f) =>
+    e = legLo + rng * f
+    r = slBaseShort - e
+    r > 0 ? (e - tgtShort) / r : 0.0
+manFib = manualEntry == "0.618 (A)" ? fibA : manualEntry == "0.786 (C)" ? fibC : fibB
+chosenFibLong  = na(rng) ? na : autoEntry ? (f_rrLong(fibA)  >= minRR ? fibA : f_rrLong(fibB)  >= minRR ? fibB : f_rrLong(fibC)  >= minRR ? fibC : na) : (f_rrLong(manFib)  >= minRR ? manFib : na)
+chosenFibShort = na(rng) ? na : autoEntry ? (f_rrShort(fibA) >= minRR ? fibA : f_rrShort(fibB) >= minRR ? fibB : f_rrShort(fibC) >= minRR ? fibC : na) : (f_rrShort(manFib) >= minRR ? manFib : na)
+limitLong  = na(chosenFibLong)  ? na : legHi - rng * chosenFibLong
+limitShort = na(chosenFibShort) ? na : legLo + rng * chosenFibShort
 
-// Golden pocket zone + 50% equilibrium (premium/discount).
-equil    = na(rng) ? na : (legHi + legLo) / 2.0
-gpHiLong = na(rng) ? na : legHi - rng * gpShal
-gpLoLong = na(rng) ? na : legHi - rng * gpDeep
-gpLoShort = na(rng) ? na : legLo + rng * gpShal
-gpHiShort = na(rng) ? na : legLo + rng * gpDeep
-inDiscount = na(equil) ? false : limitLong  < equil
-inPremium  = na(equil) ? false : limitShort > equil
+// Entry zone (0.618..0.786) for the confluence-overlap test + shading.
+ezHiLong  = na(rng) ? na : legHi - rng * fibA
+ezLoLong  = na(rng) ? na : legHi - rng * fibC
+ezLoShort = na(rng) ? na : legLo + rng * fibA
+ezHiShort = na(rng) ? na : legLo + rng * fibC
+inDiscount = na(equil) ? false : not na(limitLong)  and limitLong  < equil
+inPremium  = na(equil) ? false : not na(limitShort) and limitShort > equil
 
 var bool  entered   = false
 var float prevLegHi = na
@@ -197,8 +217,8 @@ if upWick > body and upWick > 0
     rejSBar := bar_index
 f_hit(_zlo, _zhi, _zbar, _plo, _phi) =>
     not na(_zlo) and not na(_plo) and (bar_index - _zbar) <= confWin and _zlo <= _phi and _zhi >= _plo
-bullPocketConf = f_hit(fvgBLo, fvgBHi, fvgBBar, gpLoLong, gpHiLong) or f_hit(bullOBlo, bullOBhi, obBBar, gpLoLong, gpHiLong) or f_hit(ifvgBLo, ifvgBHi, ifvgBBar, gpLoLong, gpHiLong) or f_hit(rejBLo, rejBHi, rejBBar, gpLoLong, gpHiLong)
-bearPocketConf = f_hit(fvgSLo, fvgSHi, fvgSBar, gpLoShort, gpHiShort) or f_hit(bearOBlo, bearOBhi, obSBar, gpLoShort, gpHiShort) or f_hit(ifvgSLo, ifvgSHi, ifvgSBar, gpLoShort, gpHiShort) or f_hit(rejSLo, rejSHi, rejSBar, gpLoShort, gpHiShort)
+bullPocketConf = f_hit(fvgBLo, fvgBHi, fvgBBar, ezLoLong, ezHiLong) or f_hit(bullOBlo, bullOBhi, obBBar, ezLoLong, ezHiLong) or f_hit(ifvgBLo, ifvgBHi, ifvgBBar, ezLoLong, ezHiLong) or f_hit(rejBLo, rejBHi, rejBBar, ezLoLong, ezHiLong)
+bearPocketConf = f_hit(fvgSLo, fvgSHi, fvgSBar, ezLoShort, ezHiShort) or f_hit(bearOBlo, bearOBhi, obSBar, ezLoShort, ezHiShort) or f_hit(ifvgSLo, ifvgSHi, ifvgSBar, ezLoShort, ezHiShort) or f_hit(rejSLo, rejSHi, rejSBar, ezLoShort, ezHiShort)
 
 // ---------------------- Sessions + volume confluence -------------------------
 inLondon  = not na(time(timeframe.period, londonSess, sessTZ))
@@ -224,17 +244,13 @@ if longSig or shortSig
     entered := true
 
 // ------------------------------- Markup --------------------------------------
-zoneCol = dir == 1 ? color.new(color.teal, 80) : dir == -1 ? color.new(color.red, 80) : na
-pShal = plot(showZone and dir != 0 ? oteShal : na, "OTE 0.62", color=color.new(color.gray, 0), style=plot.style_linebr)
-pDeep = plot(showZone and dir != 0 ? oteDeep : na, "OTE 0.79", color=color.new(color.gray, 0), style=plot.style_linebr)
-fill(pShal, pDeep, color=showZone ? zoneCol : na, title="OTE zone")
-plot(showZone and dir != 0 ? oteMid : na, "OTE 0.705", color=color.new(color.orange, 0), style=plot.style_linebr)
-// Golden pocket (0.618–0.65) + 50% equilibrium.
-gpTop = dir == 1 ? gpHiLong : dir == -1 ? gpHiShort : na
-gpBot = dir == 1 ? gpLoLong : dir == -1 ? gpLoShort : na
-gpc1 = plot(showZone and dir != 0 ? gpTop : na, "Golden pocket top", color=color.new(color.yellow, 0), style=plot.style_linebr)
-gpc2 = plot(showZone and dir != 0 ? gpBot : na, "Golden pocket bot", color=color.new(color.yellow, 0), style=plot.style_linebr)
-fill(gpc1, gpc2, color=showZone and dir != 0 ? color.new(color.yellow, 70) : na, title="Golden pocket")
+plot(showZone and dir != 0 ? oteMid : na, "OTE 0.705 (ref)", color=color.new(color.orange, 40), style=plot.style_linebr)
+// Entry zone (0.618–0.786) + 50% equilibrium.
+ezTop = dir == 1 ? ezHiLong : dir == -1 ? ezHiShort : na
+ezBot = dir == 1 ? ezLoLong : dir == -1 ? ezLoShort : na
+ez1 = plot(showZone and dir != 0 ? ezTop : na, "Entry zone top", color=color.new(color.yellow, 0), style=plot.style_linebr)
+ez2 = plot(showZone and dir != 0 ? ezBot : na, "Entry zone bot", color=color.new(color.yellow, 0), style=plot.style_linebr)
+fill(ez1, ez2, color=showZone and dir != 0 ? color.new(color.yellow, 75) : na, title="Entry zone")
 plot(showZone and dir != 0 ? equil : na, "Equilibrium 50%", color=color.new(color.white, 40), style=plot.style_linebr)
 plot(showZone and dir != 0 ? (dir == 1 ? limitLong : limitShort) : na, "Entry level", color=color.new(color.fuchsia, 0), style=plot.style_linebr, linewidth=2)
 

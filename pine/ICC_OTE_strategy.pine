@@ -48,16 +48,20 @@ fibLow  = input.float(0.62, "OTE shallow (fib)", minval=0.3, maxval=0.99, step=0
 fibHigh = input.float(0.79, "OTE deep (fib)",    minval=0.3, maxval=0.99, step=0.01, group=grpOte)
 useFVG  = input.bool(true,  "Require 1H Fair Value Gap confluence", group=grpOte,
      tooltip="Only enter when a fair value gap formed on the entry (chart) timeframe.")
-entryLevelStr = input.string("0.618 (golden pocket)", "Limit entry level", options=["0.618 (golden pocket)", "0.65 (golden pocket)", "0.705 (sweet spot)", "0.79 (deep)"], group=grpOte,
-     tooltip="A resting limit order is placed at this Fib level. You only get filled if price trades into the zone — the authentic OTE entry. Golden pocket = 0.618–0.65.")
-gpShal     = input.float(0.618, "Golden pocket shallow", minval=0.5, maxval=0.9, step=0.001, group=grpOte)
-gpDeep     = input.float(0.65,  "Golden pocket deep",    minval=0.5, maxval=0.9, step=0.001, group=grpOte)
+autoEntry  = input.bool(true, "Auto-pick shallowest entry meeting min R:R", group=grpOte,
+     tooltip="Evaluate the entry levels shallow→deep and place the limit at the SHALLOWEST that still gives at least the minimum R:R to the target. Off = use the manual level below.")
+fibA       = input.float(0.618, "Entry A — shallow", minval=0.4, maxval=0.95, step=0.001, group=grpOte)
+fibB       = input.float(0.705, "Entry B — common",  minval=0.4, maxval=0.95, step=0.001, group=grpOte)
+fibC       = input.float(0.786, "Entry C — deep",    minval=0.4, maxval=0.95, step=0.001, group=grpOte)
+manualEntry = input.string("0.705 (B)", "Manual entry level (auto off)", options=["0.618 (A)", "0.705 (B)", "0.786 (C)"], group=grpOte)
+targetExt  = input.float(0.0, "R:R target beyond leg extreme (× leg)", minval=0.0, step=0.1, group=grpOte,
+     tooltip="Target used for the R:R gate. 0 = the leg extreme (reclaim the high/low). Raise it to require R:R measured to liquidity beyond the leg.")
 requirePD  = input.bool(true, "Require correct Premium/Discount", group=grpOte,
      tooltip="Longs only in discount (below the 50% equilibrium of the leg), shorts only in premium. Confluences respected in the right zone = higher probability.")
-requirePocketConf = input.bool(true, "Require a confluence AT the golden pocket", group=grpOte,
-     tooltip="Only enter if the golden pocket overlaps a confluence ZONE — FVG, inverse FVG, rejection block, or order block — not merely present nearby.")
+requirePocketConf = input.bool(true, "Require a confluence AT the entry zone", group=grpOte,
+     tooltip="Only enter if the 0.618–0.786 entry zone overlaps a confluence ZONE — FVG, inverse FVG, rejection block, or order block — not merely present nearby.")
 confWin    = input.int(40, "Confluence zone valid for N bars", minval=5, group=grpOte,
-     tooltip="A confluence zone counts for the pocket-overlap test only if it formed within this many bars.")
+     tooltip="A confluence zone counts for the overlap test only if it formed within this many bars.")
 volLen     = input.int(20, "Volume average length", minval=1, group=grpOte)
 volMult    = input.float(1.0, "Volume threshold (× average)", minval=0.1, step=0.1, group=grpOte,
      tooltip="Entry-bar volume must exceed this multiple of its average to count as a volume confluence.")
@@ -167,24 +171,42 @@ oteShal = na(rng) ? na : dir == 1 ? legHi - rng * fibLow : dir == -1 ? legLo + r
 oteDeep = na(rng) ? na : dir == 1 ? legHi - rng * fibHigh : dir == -1 ? legLo + rng * fibHigh : na
 oteMid  = na(rng) ? na : dir == 1 ? legHi - rng * 0.705   : dir == -1 ? legLo + rng * 0.705   : na
 
-// Chosen limit-entry Fib level (where the resting order sits).
-entryFib   = entryLevelStr == "0.618 (golden pocket)" ? gpShal : entryLevelStr == "0.65 (golden pocket)" ? gpDeep : entryLevelStr == "0.79 (deep)" ? fibHigh : 0.705
-limitLong  = na(rng) ? na : legHi - rng * entryFib
-limitShort = na(rng) ? na : legLo + rng * entryFib
+// -------- Entry selection: shallowest OTE level that clears the min R:R -------
+// Stop = leg origin (± buffer); target = leg extreme (+ optional extension). A shallow
+// entry sits nearer the extreme → smaller reward, larger risk → lower R:R. So we walk
+// 0.618 → 0.705 → 0.786 and take the FIRST (shallowest) that still makes minRR.
+equil       = na(rng) ? na : (legHi + legLo) / 2.0
+tgtLong     = na(rng) ? na : legHi + rng * targetExt
+tgtShort    = na(rng) ? na : legLo - rng * targetExt
+slBaseLong  = na(rng) ? na : legLo - slBufTicks * syminfo.mintick
+slBaseShort = na(rng) ? na : legHi + slBufTicks * syminfo.mintick
 
-// Golden pocket zone (0.618–0.65 of the leg) and the 50% equilibrium.
-// Premium = above equilibrium, Discount = below. Long in discount, short in premium.
-equil    = na(rng) ? na : (legHi + legLo) / 2.0
-gpHiLong = na(rng) ? na : legHi - rng * gpShal   // shallower edge (higher price)
-gpLoLong = na(rng) ? na : legHi - rng * gpDeep   // deeper edge (lower price)
-gpLoShort = na(rng) ? na : legLo + rng * gpShal  // shallower edge (lower price)
-gpHiShort = na(rng) ? na : legLo + rng * gpDeep  // deeper edge (higher price)
-inDiscount = na(equil) ? false : limitLong  < equil   // long entry sits in discount
-inPremium  = na(equil) ? false : limitShort > equil   // short entry sits in premium
+f_rrLong(f) =>
+    e = legHi - rng * f
+    r = e - slBaseLong
+    r > 0 ? (tgtLong - e) / r : 0.0
+f_rrShort(f) =>
+    e = legLo + rng * f
+    r = slBaseShort - e
+    r > 0 ? (e - tgtShort) / r : 0.0
 
-// Runner target multiple and the minimum-R:R gate.
+manFib = manualEntry == "0.618 (A)" ? fibA : manualEntry == "0.786 (C)" ? fibC : fibB
+chosenFibLong  = na(rng) ? na : autoEntry ? (f_rrLong(fibA)  >= minRR ? fibA : f_rrLong(fibB)  >= minRR ? fibB : f_rrLong(fibC)  >= minRR ? fibC : na) : (f_rrLong(manFib)  >= minRR ? manFib : na)
+chosenFibShort = na(rng) ? na : autoEntry ? (f_rrShort(fibA) >= minRR ? fibA : f_rrShort(fibB) >= minRR ? fibB : f_rrShort(fibC) >= minRR ? fibC : na) : (f_rrShort(manFib) >= minRR ? manFib : na)
+
+limitLong  = na(chosenFibLong)  ? na : legHi - rng * chosenFibLong
+limitShort = na(chosenFibShort) ? na : legLo + rng * chosenFibShort
+
+// Entry zone (0.618..0.786) for the confluence-overlap test and shading.
+ezHiLong  = na(rng) ? na : legHi - rng * fibA   // shallow edge (higher price)
+ezLoLong  = na(rng) ? na : legHi - rng * fibC   // deep edge (lower price)
+ezLoShort = na(rng) ? na : legLo + rng * fibA
+ezHiShort = na(rng) ? na : legLo + rng * fibC
+inDiscount = na(equil) ? false : not na(limitLong)  and limitLong  < equil
+inPremium  = na(equil) ? false : not na(limitShort) and limitShort > equil
+
+// Runner target multiple (the R:R entry gate is handled by chosenFib above).
 lastR = numTPs == 1 ? tp1R : numTPs == 2 ? tp2R : tp3R
-rrOK  = lastR >= minRR
 
 // Reset the "already entered this leg" flag whenever the HTF leg changes.
 var bool  entered   = false
@@ -303,8 +325,8 @@ if upWick > body and upWick > 0
 f_hit(_zlo, _zhi, _zbar, _plo, _phi) =>
     not na(_zlo) and not na(_plo) and (bar_index - _zbar) <= confWin and _zlo <= _phi and _zhi >= _plo
 
-bullPocketConf = f_hit(fvgBLo, fvgBHi, fvgBBar, gpLoLong, gpHiLong) or f_hit(bullOBlo, bullOBhi, obBBar, gpLoLong, gpHiLong) or f_hit(ifvgBLo, ifvgBHi, ifvgBBar, gpLoLong, gpHiLong) or f_hit(rejBLo, rejBHi, rejBBar, gpLoLong, gpHiLong)
-bearPocketConf = f_hit(fvgSLo, fvgSHi, fvgSBar, gpLoShort, gpHiShort) or f_hit(bearOBlo, bearOBhi, obSBar, gpLoShort, gpHiShort) or f_hit(ifvgSLo, ifvgSHi, ifvgSBar, gpLoShort, gpHiShort) or f_hit(rejSLo, rejSHi, rejSBar, gpLoShort, gpHiShort)
+bullPocketConf = f_hit(fvgBLo, fvgBHi, fvgBBar, ezLoLong, ezHiLong) or f_hit(bullOBlo, bullOBhi, obBBar, ezLoLong, ezHiLong) or f_hit(ifvgBLo, ifvgBHi, ifvgBBar, ezLoLong, ezHiLong) or f_hit(rejBLo, rejBHi, rejBBar, ezLoLong, ezHiLong)
+bearPocketConf = f_hit(fvgSLo, fvgSHi, fvgSBar, ezLoShort, ezHiShort) or f_hit(bearOBlo, bearOBhi, obSBar, ezLoShort, ezHiShort) or f_hit(ifvgSLo, ifvgSHi, ifvgSBar, ezLoShort, ezHiShort) or f_hit(rejSLo, rejSHi, rejSBar, ezLoShort, ezHiShort)
 
 // ------------------------------- Entries -------------------------------------
 // Daily trade cap — reset the counter each new calendar day (exchange time).
@@ -331,8 +353,8 @@ reqConfl  = useSessions and emphasizeNY and inLondon and not inNY ? minConfl + 1
 // Setup is "armed" once bias aligns, we're in session, confluence clears the quality
 // bar, the R:R gate passes, and we're under the daily cap. While armed and flat, a
 // resting LIMIT order sits at the OTE level — it fills only if price trades into it.
-armLong  = allowLong  and dir == 1  and not entered and rrOK and underCap and inSession and (not requireVol or volOK) and bullConfl >= reqConfl and (not requirePD or inDiscount) and (not requirePocketConf or bullPocketConf) and not na(limitLong)  and close > legLo and (not useFVG or hasBullFVG) and (not useSweep or hasBullSweep)
-armShort = allowShort and dir == -1 and not entered and rrOK and underCap and inSession and (not requireVol or volOK) and bearConfl >= reqConfl and (not requirePD or inPremium)  and (not requirePocketConf or bearPocketConf) and not na(limitShort) and close < legHi and (not useFVG or hasBearFVG) and (not useSweep or hasBearSweep)
+armLong  = allowLong  and dir == 1  and not entered and underCap and inSession and (not requireVol or volOK) and bullConfl >= reqConfl and (not requirePD or inDiscount) and (not requirePocketConf or bullPocketConf) and not na(limitLong)  and close > legLo and (not useFVG or hasBullFVG) and (not useSweep or hasBullSweep)
+armShort = allowShort and dir == -1 and not entered and underCap and inSession and (not requireVol or volOK) and bearConfl >= reqConfl and (not requirePD or inPremium)  and (not requirePocketConf or bearPocketConf) and not na(limitShort) and close < legHi and (not useFVG or hasBearFVG) and (not useSweep or hasBearSweep)
 
 // Position size from fixed-fractional risk: a full stop-out loses riskPct of equity.
 // qty = (equity * riskPct%) / (stop distance in price * currency value per point).
@@ -445,20 +467,16 @@ if strategy.position_size < 0
         strategy.exit("Runner S", "Short", stop=curStopShort, limit=runShort)
 
 // ------------------------------- Markup --------------------------------------
-zoneCol = dir == 1 ? color.new(color.teal, 80) : dir == -1 ? color.new(color.red, 80) : na
-pShal = plot(showZone and dir != 0 ? oteShal : na, "OTE 0.62", color=color.new(color.gray, 0), style=plot.style_linebr)
-pDeep = plot(showZone and dir != 0 ? oteDeep : na, "OTE 0.79", color=color.new(color.gray, 0), style=plot.style_linebr)
-fill(pShal, pDeep, color=showZone ? zoneCol : na, title="OTE zone")
-plot(showZone and dir != 0 ? oteMid : na, "OTE 0.705", color=color.new(color.orange, 0), style=plot.style_linebr)
+plot(showZone and dir != 0 ? oteMid : na, "OTE 0.705 (ref)", color=color.new(color.orange, 40), style=plot.style_linebr)
 plot(showZone and dir != 0 ? legHi  : na, "Leg high", color=color.new(color.blue, 50), style=plot.style_linebr)
 plot(showZone and dir != 0 ? legLo  : na, "Leg low",  color=color.new(color.blue, 50), style=plot.style_linebr)
 
-// Golden pocket (0.618–0.65) and the 50% equilibrium (premium/discount divider).
-gpTop = dir == 1 ? gpHiLong : dir == -1 ? gpHiShort : na
-gpBot = dir == 1 ? gpLoLong : dir == -1 ? gpLoShort : na
-gpc1 = plot(showZone and dir != 0 ? gpTop : na, "Golden pocket top", color=color.new(color.yellow, 0), style=plot.style_linebr)
-gpc2 = plot(showZone and dir != 0 ? gpBot : na, "Golden pocket bot", color=color.new(color.yellow, 0), style=plot.style_linebr)
-fill(gpc1, gpc2, color=showZone and dir != 0 ? color.new(color.yellow, 70) : na, title="Golden pocket")
+// Entry zone (0.618–0.786) and the 50% equilibrium (premium/discount divider).
+ezTop = dir == 1 ? ezHiLong : dir == -1 ? ezHiShort : na
+ezBot = dir == 1 ? ezLoLong : dir == -1 ? ezLoShort : na
+ez1 = plot(showZone and dir != 0 ? ezTop : na, "Entry zone top", color=color.new(color.yellow, 0), style=plot.style_linebr)
+ez2 = plot(showZone and dir != 0 ? ezBot : na, "Entry zone bot", color=color.new(color.yellow, 0), style=plot.style_linebr)
+fill(ez1, ez2, color=showZone and dir != 0 ? color.new(color.yellow, 75) : na, title="Entry zone")
 plot(showZone and dir != 0 ? equil : na, "Equilibrium 50%", color=color.new(color.white, 40), style=plot.style_linebr)
 
 // Live trade management: TP tranches + the current (possibly break-even) stop.
@@ -498,7 +516,8 @@ if showTable and barstate.islast
     pdOK      = dir == 1 ? inDiscount : dir == -1 ? inPremium : false
     pdTxt     = dir == 1 ? (inDiscount ? "discount ✓" : "premium ✗") : dir == -1 ? (inPremium ? "premium ✓" : "discount ✗") : "–"
     pocketOK  = dir == 1 ? bullPocketConf : dir == -1 ? bearPocketConf : false
-    var table t = table.new(position.top_right, 2, 9, border_width=1)
+    chosenF   = dir == 1 ? chosenFibLong : dir == -1 ? chosenFibShort : na
+    var table t = table.new(position.top_right, 2, 10, border_width=1)
     table.cell(t, 0, 0, "Bias " + tfBias,    text_color=color.white, bgcolor=color.new(color.black, 30))
     table.cell(t, 1, 0, f_arrow(biasD),       text_color=f_col(biasD), bgcolor=color.new(color.black, 30))
     table.cell(t, 0, 1, "Confirm " + tfConfirm, text_color=color.white, bgcolor=color.new(color.black, 30))
@@ -509,11 +528,13 @@ if showTable and barstate.islast
     table.cell(t, 1, 3, sessTxt,              text_color=sessCol, bgcolor=color.new(color.black, 30))
     table.cell(t, 0, 4, "P / D zone",         text_color=color.white, bgcolor=color.new(color.black, 30))
     table.cell(t, 1, 4, pdTxt,                text_color=pdOK ? color.teal : color.gray, bgcolor=color.new(color.black, 30))
-    table.cell(t, 0, 5, "Pocket conf",        text_color=color.white, bgcolor=color.new(color.black, 30))
-    table.cell(t, 1, 5, pocketOK ? "AT pocket ✓" : "none", text_color=pocketOK ? color.teal : color.gray, bgcolor=color.new(color.black, 30))
+    table.cell(t, 0, 5, "Conf @ zone",        text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(t, 1, 5, pocketOK ? "in zone ✓" : "none", text_color=pocketOK ? color.teal : color.gray, bgcolor=color.new(color.black, 30))
     table.cell(t, 0, 6, "Confluence",         text_color=color.white, bgcolor=color.new(color.black, 30))
     table.cell(t, 1, 6, str.tostring(curConfl) + " / " + str.tostring(reqConfl) + (volOK ? " ⚡" : ""), text_color=curConfl >= reqConfl ? color.teal : color.gray, bgcolor=color.new(color.black, 30))
-    table.cell(t, 0, 7, "Setup",              text_color=color.white, bgcolor=color.new(color.black, 30))
-    table.cell(t, 1, 7, dir == 1 ? "LONG" : dir == -1 ? "SHORT" : "wait", text_color=f_col(dir), bgcolor=color.new(color.black, 30))
-    table.cell(t, 0, 8, "Trades today",       text_color=color.white, bgcolor=color.new(color.black, 30))
-    table.cell(t, 1, 8, str.tostring(tradesToday) + " / " + str.tostring(maxTrades), text_color=underCap ? color.teal : color.orange, bgcolor=color.new(color.black, 30))
+    table.cell(t, 0, 7, "Entry @",            text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(t, 1, 7, na(chosenF) ? "no 2:1" : str.tostring(chosenF), text_color=na(chosenF) ? color.gray : color.teal, bgcolor=color.new(color.black, 30))
+    table.cell(t, 0, 8, "Setup",              text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(t, 1, 8, dir == 1 ? "LONG" : dir == -1 ? "SHORT" : "wait", text_color=f_col(dir), bgcolor=color.new(color.black, 30))
+    table.cell(t, 0, 9, "Trades today",       text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(t, 1, 9, str.tostring(tradesToday) + " / " + str.tostring(maxTrades), text_color=underCap ? color.teal : color.orange, bgcolor=color.new(color.black, 30))

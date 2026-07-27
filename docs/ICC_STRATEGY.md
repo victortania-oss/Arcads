@@ -31,20 +31,30 @@ must confirm the same direction. This is your "structure on 1D, matches on 4H" s
 - Only when **1D and 4H agree** is a setup armed. This is the single biggest filter —
   it keeps you trading *with* the higher-timeframe order flow.
 
-### 2b. Golden pocket, Premium/Discount & confluence AT the pocket
+### 2b. Entry selection, Premium/Discount & confluence AT the entry
 
 This is the heart of the entry model, and the bot now enforces it precisely — it will
-**not** enter just because confluences exist *nearby*; they must sit *in the pocket*, in
-the right half of the range:
+**not** enter just because confluences exist *nearby*; they must sit *in the entry zone*,
+in the right half of the range, and at the best-priced level that still pays 2:1:
 
-- **Golden pocket (0.618–0.65).** The default entry is the golden pocket, not the broad
-  OTE. It's drawn as a **yellow band**, with the resting limit order inside it.
+- **Shallowest entry that clears 2:1 (auto).** You trade the OTE band at **0.618 / 0.705
+  / 0.786**, entering at the *proximal* (shallowest) level that still meets your R:R gate.
+  The bot walks 0.618 → 0.705 → 0.786 and places the limit at the **first one that makes
+  the minimum R:R** to the target (leg extreme by default). Because a shallower entry sits
+  nearer the target (less reward) and further from the stop (more risk), it has the lowest
+  R:R — so this naturally lands on **0.705 most of the time** (0.618 usually only makes
+  ~1.6:1 to the reclaimed high; 0.705 makes ~2.4:1), exactly matching your most common
+  entry. If none of the three make 2:1, **no trade** (`Entry @` shows *no 2:1*).
+  Turn *Auto-pick* off to force a single manual level (still gated by 2:1).
+- **The entry zone (0.618–0.786)** is drawn as a **yellow band**, with the chosen limit
+  marked by the magenta line inside it. The `R:R target beyond leg extreme` input lets you
+  measure R:R to liquidity past the leg (raising it lets shallower entries qualify).
 - **Premium / Discount (50% equilibrium).** The bot marks the **equilibrium** (50% of the
   dealing range = the HTF leg, per your notes: swing-high→swing-low). **Longs only fire in
   discount** (below equilibrium); **shorts only in premium** (above). Turn off with
   *Require correct Premium/Discount*.
-- **Confluence AT the pocket (spatial, not just present).** With *Require a confluence at
-  the golden pocket* on, an entry needs the pocket to **overlap a confluence zone**:
+- **Confluence AT the entry (spatial, not just present).** With *Require a confluence at
+  the entry zone* on, an entry needs the 0.618–0.786 zone to **overlap a confluence zone**:
   - **Fair Value Gap** (the 3-candle imbalance band)
   - **Inverse FVG** — an opposite-side FVG that got closed through and flipped to support/
     resistance
@@ -168,10 +178,11 @@ highest-quality setups — which matters because you're capped at 1–2 trades a
 | Draw OTE / Fib on | Which HTF leg carries the zone | `Confirmation` (4H) |
 | Swing lookback | Strictness of HTF swing detection | 5 |
 | OTE shallow / deep | Fib edges of the entry zone | 0.62 / 0.79 |
-| Limit entry level | Fib level the resting order sits at | 0.618 (golden pocket) |
-| Golden pocket shallow / deep | Pocket band edges | 0.618 / 0.65 |
+| Auto-pick shallowest entry | Take proximal level that clears 2:1 | On |
+| Entry A / B / C | Candidate fib levels | 0.618 / 0.705 / 0.786 |
+| R:R target beyond leg extreme | Target for the 2:1 gate | 0 (leg extreme) |
 | Require correct Premium/Discount | Long in discount, short in premium | On |
-| Require a confluence at the golden pocket | Pocket must overlap FVG/IFVG/OB/rejection | On |
+| Require a confluence at the entry zone | Zone must overlap FVG/IFVG/OB/rejection | On |
 | Confluence zone valid for N bars | Freshness of a confluence zone | 40 |
 | Require 1H FVG confluence | Only enter with displacement | On |
 | Require liquidity sweep | Demand a stop raid first | Off (test per symbol) |
