@@ -120,6 +120,10 @@ showFVG   = input.bool(true, "Show 1H FVG box",     group=grpViz)
 showOB    = input.bool(true, "Show 1H order block", group=grpViz)
 showTable = input.bool(true, "Show bias table",     group=grpViz)
 
+grpAlert = "⑧ Alerts"
+alertStyle = input.string("Readable (manual)", "Alert format", options=["Readable (manual)", "JSON (webhook)"], group=grpAlert,
+     tooltip="Readable = a plain-English play-by-play for trading by hand (entry, size, stop, TPs, and when to move the stop). JSON = machine-readable for the webhook bridge.")
+
 // --------------------- HTF structure (Indication) ----------------------------
 // Runs on the requested timeframe and returns [bias, legHigh, legLow].
 // bias: 1 bullish, -1 bearish, 0 none. Leg = the impulse that broke structure.
@@ -399,14 +403,22 @@ if filledLong
     initSize := math.abs(strategy.position_size)
     entered  := true
     tradesToday += 1
-    alert('{"strategy":"ICC-OTE-MTF","ticker":"' + syminfo.tickerid + '","action":"buy","price":' + str.tostring(entryPx) + ',"sl":' + str.tostring(pendSLlong) + ',"tp1":' + str.tostring(entryPx + riskPx * tp1R) + ',"tp2":' + str.tostring(entryPx + riskPx * tp2R) + ',"tp3":' + str.tostring(entryPx + riskPx * tp3R) + ',"bias":"1D+4H bull","tf":"' + timeframe.period + '"}', alert.freq_once_per_bar)
+    t1 = entryPx + riskPx * tp1R
+    t2 = entryPx + riskPx * tp2R
+    t3 = entryPx + riskPx * tp3R
+    msgL = alertStyle == "JSON (webhook)" ? '{"strategy":"ICC-OTE-MTF","ticker":"' + syminfo.tickerid + '","action":"buy","price":' + str.tostring(entryPx) + ',"size":' + str.tostring(initSize) + ',"sl":' + str.tostring(pendSLlong) + ',"tp1":' + str.tostring(t1) + ',"tp2":' + str.tostring(t2) + ',"tp3":' + str.tostring(t3) + ',"tf":"' + timeframe.period + '"}' : "🟢 ICC LONG " + syminfo.ticker + " (" + timeframe.period + ")\nEntry " + str.tostring(entryPx) + "   Size " + str.tostring(initSize) + " contract(s)\nStop " + str.tostring(pendSLlong) + "   (= your 1% risk)\nTP1 " + str.tostring(t1) + "  take " + str.tostring(tp1pct) + "%  → then MOVE STOP TO BREAKEVEN\nTP2 " + str.tostring(t2) + "  take " + str.tostring(tp2pct) + "%  → then TRAIL stop to TP1\nTP3 " + str.tostring(t3) + "  runner — let it run"
+    alert(msgL, alert.freq_once_per_bar)
 if filledShort
     entryPx  := strategy.position_avg_price
     riskPx   := pendSLshort - entryPx
     initSize := math.abs(strategy.position_size)
     entered  := true
     tradesToday += 1
-    alert('{"strategy":"ICC-OTE-MTF","ticker":"' + syminfo.tickerid + '","action":"sell","price":' + str.tostring(entryPx) + ',"sl":' + str.tostring(pendSLshort) + ',"tp1":' + str.tostring(entryPx - riskPx * tp1R) + ',"tp2":' + str.tostring(entryPx - riskPx * tp2R) + ',"tp3":' + str.tostring(entryPx - riskPx * tp3R) + ',"bias":"1D+4H bear","tf":"' + timeframe.period + '"}', alert.freq_once_per_bar)
+    t1 = entryPx - riskPx * tp1R
+    t2 = entryPx - riskPx * tp2R
+    t3 = entryPx - riskPx * tp3R
+    msgS = alertStyle == "JSON (webhook)" ? '{"strategy":"ICC-OTE-MTF","ticker":"' + syminfo.tickerid + '","action":"sell","price":' + str.tostring(entryPx) + ',"size":' + str.tostring(initSize) + ',"sl":' + str.tostring(pendSLshort) + ',"tp1":' + str.tostring(t1) + ',"tp2":' + str.tostring(t2) + ',"tp3":' + str.tostring(t3) + ',"tf":"' + timeframe.period + '"}' : "🔴 ICC SHORT " + syminfo.ticker + " (" + timeframe.period + ")\nEntry " + str.tostring(entryPx) + "   Size " + str.tostring(initSize) + " contract(s)\nStop " + str.tostring(pendSLshort) + "   (= your 1% risk)\nTP1 " + str.tostring(t1) + "  take " + str.tostring(tp1pct) + "%  → then MOVE STOP TO BREAKEVEN\nTP2 " + str.tostring(t2) + "  take " + str.tostring(tp2pct) + "%  → then TRAIL stop to TP1\nTP3 " + str.tostring(t3) + "  runner — let it run"
+    alert(msgS, alert.freq_once_per_bar)
 
 // -------------------- Scaled take-profit + break-even ------------------------
 // TP prices from the per-unit risk. The last active tranche is the "runner".
@@ -439,6 +451,19 @@ beLong  = entryPx + beOffTicks * syminfo.mintick
 beShort = entryPx - beOffTicks * syminfo.mintick
 curStopLong  = tp2hit and trailTP2 ? tp1Long  : tp1hit and moveBE ? beLong  : pendSLlong
 curStopShort = tp2hit and trailTP2 ? tp1Short : tp1hit and moveBE ? beShort : pendSLshort
+
+// Play-by-play management alerts — fire once, the bar each tranche first prints.
+isLongPos  = strategy.position_size > 0
+tp1JustHit = tp1hit and not tp1hit[1] and strategy.position_size != 0
+tp2JustHit = tp2hit and not tp2hit[1] and strategy.position_size != 0
+if tp1JustHit and moveBE
+    bePx = isLongPos ? beLong : beShort
+    msg1 = alertStyle == "JSON (webhook)" ? '{"strategy":"ICC-OTE-MTF","ticker":"' + syminfo.tickerid + '","action":"move_stop","reason":"tp1","stop":' + str.tostring(bePx) + '}' : "🎯 TP1 HIT " + syminfo.ticker + " — take " + str.tostring(tp1pct) + "% off NOW, then MOVE YOUR STOP TO BREAKEVEN (" + str.tostring(bePx) + "). The runner is now risk-free."
+    alert(msg1, alert.freq_once_per_bar)
+if tp2JustHit and trailTP2
+    trailPx = isLongPos ? tp1Long : tp1Short
+    msg2 = alertStyle == "JSON (webhook)" ? '{"strategy":"ICC-OTE-MTF","ticker":"' + syminfo.tickerid + '","action":"move_stop","reason":"tp2","stop":' + str.tostring(trailPx) + '}' : "🎯 TP2 HIT " + syminfo.ticker + " — take " + str.tostring(tp2pct) + "% off, then TRAIL YOUR STOP UP TO TP1 (" + str.tostring(trailPx) + "). Profit locked on the runner."
+    alert(msg2, alert.freq_once_per_bar)
 
 q1 = initSize * tp1pct / 100.0
 q2 = initSize * tp2pct / 100.0

@@ -32,7 +32,19 @@ webhook bridge for auto-execution.
    call"**; for the indicator pick **"ICC-OTE Long"/"ICC-OTE Short"**.
 3. **Notifications:** enable **Webhook URL** only when you've done part B. Otherwise
    use app/email/pop-up notifications and trade manually.
-4. The alert message is already JSON — leave it as-is.
+4. The alert message is generated for you — leave it as-is.
+
+**Play-by-play alerts (manual trading).** With the strategy's **Alert format =
+"Readable (manual)"** (the default), one alert on *"Any alert() function call"* gives
+you the whole trade as plain English — no need to watch the screen:
+- **On entry:** direction, price, **contract size** (already sized to your 1% risk),
+  stop, and TP1/TP2/TP3 with what % to close at each.
+- **When TP1 prints:** "take X% off, **move stop to break-even**" — the runner is now
+  risk-free.
+- **When TP2 prints:** "take Y% off, **trail stop up to TP1**" — profit locked.
+
+So each alert is a full instruction you just execute in your platform. Switch **Alert
+format** to **"JSON (webhook)"** only if you're wiring the automation in part B.
 
 That's a fully working alert bot. **You can stop here** and place trades manually
 from the alerts. Everything below is for automation.
