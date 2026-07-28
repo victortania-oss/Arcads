@@ -119,6 +119,7 @@ showZone  = input.bool(true, "Show OTE zone + Fib", group=grpViz)
 showFVG   = input.bool(true, "Show 1H FVG box",     group=grpViz)
 showOB    = input.bool(true, "Show 1H order block", group=grpViz)
 showTable = input.bool(true, "Show bias table",     group=grpViz)
+tablePos  = input.string("Top right", "Bias table position", options=["Top right", "Top left", "Bottom right", "Bottom left", "Middle right", "Middle left"], group=grpViz)
 
 grpAlert = "⑧ Alerts"
 alertStyle = input.string("Readable (manual)", "Alert format", options=["Readable (manual)", "JSON (webhook)"], group=grpAlert,
@@ -538,7 +539,8 @@ if showTable and barstate.islast
     pdTxt     = dir == 1 ? (inDiscount ? "discount ✓" : "premium ✗") : dir == -1 ? (inPremium ? "premium ✓" : "discount ✗") : "–"
     pocketOK  = dir == 1 ? bullPocketConf : dir == -1 ? bearPocketConf : false
     chosenF   = dir == 1 ? chosenFibLong : dir == -1 ? chosenFibShort : na
-    var table t = table.new(position.top_right, 2, 10, border_width=1)
+    tPos = tablePos == "Top left" ? position.top_left : tablePos == "Bottom right" ? position.bottom_right : tablePos == "Bottom left" ? position.bottom_left : tablePos == "Middle right" ? position.middle_right : tablePos == "Middle left" ? position.middle_left : position.top_right
+    var table t = table.new(tPos, 2, 10, border_width=1)
     table.cell(t, 0, 0, "Bias " + tfBias,    text_color=color.white, bgcolor=color.new(color.black, 30))
     table.cell(t, 1, 0, f_arrow(biasD),       text_color=f_col(biasD), bgcolor=color.new(color.black, 30))
     table.cell(t, 0, 1, "Confirm " + tfConfirm, text_color=color.white, bgcolor=color.new(color.black, 30))
