@@ -86,6 +86,11 @@ minRR      = input.float(2.0, "Minimum R:R (skip if runner target < this)", minv
 maxTrades  = input.int(2, "Max trades per day", minval=1, maxval=20, group=grpRisk,
      tooltip="Stop taking new entries once this many have filled today. Resets each new day.")
 slBufTicks = input.float(4, "Stop buffer (ticks beyond leg)", minval=0, group=grpRisk)
+stopMode   = input.string("Leg origin (OTE)", "Stop model", options=["Leg origin (OTE)", "ATR (volatility)"], group=grpRisk,
+     tooltip="Leg origin = classic OTE stop at the 1.0 fib (wide, tuned to index futures). ATR = stop a multiple of Average True Range from entry — adapts to each instrument's volatility (try this on gold/crude/crypto).")
+atrLen     = input.int(14, "ATR length", minval=1, group=grpRisk)
+atrMult    = input.float(2.0, "ATR stop multiple", minval=0.2, step=0.1, group=grpRisk,
+     tooltip="Stop distance = this × ATR from entry, when Stop model = ATR.")
 numTPs     = input.int(3, "Take-profit tranches", minval=1, maxval=3, group=grpRisk,
      tooltip="Scale out over 1–3 targets. With 3, the final tranche runs risk-free after break-even.")
 tp1R       = input.float(1.5, "TP1 (R)", minval=0.1, step=0.1, group=grpRisk)
@@ -176,19 +181,23 @@ oteMid  = na(rng) ? na : dir == 1 ? legHi - rng * 0.705   : dir == -1 ? legLo + 
 // Stop = leg origin (± buffer); target = leg extreme (+ optional extension). A shallow
 // entry sits nearer the extreme → smaller reward, larger risk → lower R:R. So we walk
 // 0.618 → 0.705 → 0.786 and take the FIRST (shallowest) that still makes minRR.
+atrVal      = ta.atr(atrLen)
+useATRstop  = stopMode == "ATR (volatility)"
 equil       = na(rng) ? na : (legHi + legLo) / 2.0
 tgtLong     = na(rng) ? na : legHi + rng * targetExt
 tgtShort    = na(rng) ? na : legLo - rng * targetExt
-slBaseLong  = na(rng) ? na : legLo - slBufTicks * syminfo.mintick
-slBaseShort = na(rng) ? na : legHi + slBufTicks * syminfo.mintick
+
+// Stop for a candidate long/short entry price, per the chosen stop model.
+f_slLong(e)  => useATRstop ? e - atrMult * atrVal : legLo - slBufTicks * syminfo.mintick
+f_slShort(e) => useATRstop ? e + atrMult * atrVal : legHi + slBufTicks * syminfo.mintick
 
 f_rrLong(f) =>
     e = legHi - rng * f
-    r = e - slBaseLong
+    r = e - f_slLong(e)
     r > 0 ? (tgtLong - e) / r : 0.0
 f_rrShort(f) =>
     e = legLo + rng * f
-    r = slBaseShort - e
+    r = f_slShort(e) - e
     r > 0 ? (e - tgtShort) / r : 0.0
 
 manFib = manualEntry == "0.618 (A)" ? fibA : manualEntry == "0.786 (C)" ? fibC : fibB
@@ -370,7 +379,7 @@ var float pendSLshort = na
 
 if strategy.position_size == 0
     if armLong
-        slPx  = legLo - slBufTicks * syminfo.mintick
+        slPx  = f_slLong(limitLong)
         qtyL  = f_qty(limitLong, slPx)
         if qtyL > 0
             pendSLlong := slPx
@@ -380,7 +389,7 @@ if strategy.position_size == 0
     else
         strategy.cancel("Long")
     if armShort
-        slPx  = legHi + slBufTicks * syminfo.mintick
+        slPx  = f_slShort(limitShort)
         qtyS  = f_qty(limitShort, slPx)
         if qtyS > 0
             pendSLshort := slPx
