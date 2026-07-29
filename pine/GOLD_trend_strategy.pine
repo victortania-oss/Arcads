@@ -1,0 +1,155 @@
+//@version=5
+// =============================================================================
+//  GOLD TREND RIDER — Trend-Following
+//  A from-scratch trend system built for gold's character (trends on macro,
+//  whipsaws intraday). NOT the ICC bot — a different engine:
+//    FILTER : trade only with the higher-trend (price vs a long EMA, sloping)
+//    ENTRY  : Donchian breakout (new N-bar high/low) in the trend direction
+//    STOP   : initial ATR stop, then an ATR "chandelier" trailing stop that
+//             ratchets in your favour so winners run and losers get cut
+//    RISK   : position auto-sized to a fixed % of equity per trade
+//
+//  Educational template — NOT financial advice. Validate on a big sample AND
+//  out-of-sample before trusting it. Gold is hard; this may not hold up.
+// =============================================================================
+strategy(
+     title             = "Gold Trend Rider — Trend-Following",
+     shorttitle        = "GOLD-TREND",
+     overlay           = true,
+     initial_capital   = 100000,
+     default_qty_type  = strategy.fixed,
+     default_qty_value = 1,
+     commission_type   = strategy.commission.percent,
+     commission_value  = 0.02,
+     slippage          = 1,
+     pyramiding        = 0,
+     process_orders_on_close = true,
+     calc_on_order_fills     = true)
+
+// ------------------------------ Inputs ---------------------------------------
+grpTrend = "① Trend filter"
+emaLen   = input.int(100, "Trend EMA length", minval=5, group=grpTrend,
+     tooltip="Only long above this EMA, short below. The regime filter that keeps you with the trend.")
+useSlope = input.bool(true, "Require EMA sloping in trend direction", group=grpTrend,
+     tooltip="Extra filter: EMA must be rising to go long / falling to go short. Cuts counter-trend chop.")
+slopeLook = input.int(3, "EMA slope lookback (bars)", minval=1, group=grpTrend)
+
+grpEntry = "② Entry (breakout)"
+donLen   = input.int(20, "Breakout lookback (bars)", minval=2, group=grpEntry,
+     tooltip="Enter long when price closes above the highest high of this many prior bars (Donchian breakout); short on a new low.")
+
+grpStop  = "③ Stop & trail (ATR)"
+atrLen   = input.int(14, "ATR length", minval=1, group=grpStop)
+atrInit  = input.float(2.0, "Initial stop (× ATR)", minval=0.2, step=0.1, group=grpStop,
+     tooltip="Initial stop distance = this × ATR from entry.")
+chMult   = input.float(3.0, "Trailing stop (× ATR)", minval=0.2, step=0.1, group=grpStop,
+     tooltip="Chandelier trail: stop rides this many ATR below the highest high since entry (mirror for shorts). Bigger = looser trail, lets winners run further.")
+chLen    = input.int(22, "Trail lookback (bars)", minval=1, group=grpStop)
+
+grpRisk  = "④ Risk"
+riskPct  = input.float(1.0, "Risk per trade (% of equity)", minval=0.05, maxval=100, step=0.1, group=grpRisk)
+roundContr = input.bool(true, "Round size to whole contracts", group=grpRisk)
+
+grpDir   = "⑤ Direction"
+allowLong  = input.bool(true, "Allow longs",  group=grpDir)
+allowShort = input.bool(true, "Allow shorts", group=grpDir)
+
+grpSess  = "⑥ Session (optional)"
+useSession = input.bool(false, "Restrict entries to a session", group=grpSess,
+     tooltip="Off = trade any time (fine for trend-following). On = only enter during the window below.")
+sessTZ     = input.string("America/New_York", "Session timezone", group=grpSess)
+sess       = input.session("0800-1700", "Session (gold active hours)", group=grpSess)
+
+grpAlert = "⑦ Alerts"
+alertStyle = input.string("Readable (manual)", "Alert format", options=["Readable (manual)", "JSON (webhook)"], group=grpAlert)
+
+// ------------------------------ Calculations ---------------------------------
+ema   = ta.ema(close, emaLen)
+emaUp = ema > ema[slopeLook]
+emaDn = ema < ema[slopeLook]
+upTrend = close > ema and (not useSlope or emaUp)
+dnTrend = close < ema and (not useSlope or emaDn)
+
+atr   = ta.atr(atrLen)
+upper = ta.highest(high, donLen)[1]   // highest high of the prior donLen bars
+lower = ta.lowest(low,  donLen)[1]
+
+inSess = not useSession or not na(time(timeframe.period, sess, sessTZ))
+
+longBreak  = allowLong  and upTrend and close > upper and inSess
+shortBreak = allowShort and dnTrend and close < lower and inSess
+
+// --------------------------- Position sizing ---------------------------------
+f_qty(dist) =>
+    raw = dist > 0 and syminfo.pointvalue > 0 ? (strategy.equity * riskPct / 100.0) / (dist * syminfo.pointvalue) : 0.0
+    roundContr ? math.floor(raw) : raw
+
+// ------------------------------- Entries -------------------------------------
+var float initStop = na
+if strategy.position_size == 0
+    if longBreak
+        sl  = close - atrInit * atr
+        qty = f_qty(close - sl)
+        if qty > 0
+            initStop := sl
+            strategy.entry("Long", strategy.long, qty=qty)
+    else if shortBreak
+        sl  = close + atrInit * atr
+        qty = f_qty(sl - close)
+        if qty > 0
+            initStop := sl
+            strategy.entry("Short", strategy.short, qty=qty)
+
+// -------------------------- Trailing stop (chandelier) -----------------------
+var float entryPx   = na
+var float trailStop = na
+var float initSize  = na
+longFill  = strategy.position_size > 0 and strategy.position_size[1] <= 0
+shortFill = strategy.position_size < 0 and strategy.position_size[1] >= 0
+
+if longFill
+    entryPx   := strategy.position_avg_price
+    trailStop := initStop
+    initSize  := math.abs(strategy.position_size)
+    msg = alertStyle == "JSON (webhook)" ? '{"strategy":"GOLD-TREND","ticker":"' + syminfo.tickerid + '","action":"buy","price":' + str.tostring(entryPx) + ',"size":' + str.tostring(initSize) + ',"sl":' + str.tostring(initStop) + ',"tf":"' + timeframe.period + '"}' : "🟢 TREND LONG " + syminfo.ticker + " (" + timeframe.period + ")\nEntry " + str.tostring(entryPx) + "   Size " + str.tostring(initSize) + "\nInitial stop " + str.tostring(initStop) + "  (1% risk)\nThen TRAIL your stop up to the yellow line as it rises — let the trend run."
+    alert(msg, alert.freq_once_per_bar)
+if shortFill
+    entryPx   := strategy.position_avg_price
+    trailStop := initStop
+    initSize  := math.abs(strategy.position_size)
+    msg = alertStyle == "JSON (webhook)" ? '{"strategy":"GOLD-TREND","ticker":"' + syminfo.tickerid + '","action":"sell","price":' + str.tostring(entryPx) + ',"size":' + str.tostring(initSize) + ',"sl":' + str.tostring(initStop) + ',"tf":"' + timeframe.period + '"}' : "🔴 TREND SHORT " + syminfo.ticker + " (" + timeframe.period + ")\nEntry " + str.tostring(entryPx) + "   Size " + str.tostring(initSize) + "\nInitial stop " + str.tostring(initStop) + "  (1% risk)\nThen TRAIL your stop down to the yellow line as it falls — let the trend run."
+    alert(msg, alert.freq_once_per_bar)
+
+// Ratchet the trail in our favour only, and keep the protective exit active.
+if strategy.position_size > 0
+    ch = ta.highest(high, chLen) - chMult * atr
+    trailStop := math.max(nz(trailStop, ch), ch)
+    strategy.exit("Long exit", "Long", stop=trailStop)
+if strategy.position_size < 0
+    ch = ta.lowest(low, chLen) + chMult * atr
+    trailStop := math.min(nz(trailStop, ch), ch)
+    strategy.exit("Short exit", "Short", stop=trailStop)
+if strategy.position_size == 0
+    trailStop := na
+    entryPx   := na
+
+// ------------------------------- Markup --------------------------------------
+plot(ema, "Trend EMA", color=upTrend ? color.new(color.teal, 0) : dnTrend ? color.new(color.red, 0) : color.new(color.gray, 0), linewidth=2)
+plot(upper, "Breakout high", color=color.new(color.gray, 60), style=plot.style_stepline)
+plot(lower, "Breakout low",  color=color.new(color.gray, 60), style=plot.style_stepline)
+plot(strategy.position_size != 0 ? trailStop : na, "Trailing stop", color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
+plotshape(longFill,  title="Long entry",  style=shape.labelup,   location=location.belowbar, color=color.teal, text="▲", textcolor=color.white, size=size.small)
+plotshape(shortFill, title="Short entry", style=shape.labeldown, location=location.abovebar, color=color.red,  text="▼", textcolor=color.white, size=size.small)
+
+// ------------------------------- Info table ----------------------------------
+if barstate.islast
+    trTxt = upTrend ? "▲ Up" : dnTrend ? "▼ Down" : "– Flat"
+    trCol = upTrend ? color.teal : dnTrend ? color.red : color.gray
+    posTxt = strategy.position_size > 0 ? "LONG" : strategy.position_size < 0 ? "SHORT" : "flat"
+    var table t = table.new(position.top_right, 2, 3, border_width=1)
+    table.cell(t, 0, 0, "Trend",   text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(t, 1, 0, trTxt,     text_color=trCol, bgcolor=color.new(color.black, 30))
+    table.cell(t, 0, 1, "Position", text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(t, 1, 1, posTxt,    text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(t, 0, 2, "ATR",     text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(t, 1, 2, str.tostring(math.round(atr * 100) / 100), text_color=color.white, bgcolor=color.new(color.black, 30))
