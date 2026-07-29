@@ -65,6 +65,12 @@ sess       = input.session("0800-1700", "Session (gold active hours)", group=grp
 grpAlert = "⑦ Alerts"
 alertStyle = input.string("Readable (manual)", "Alert format", options=["Readable (manual)", "JSON (webhook)"], group=grpAlert)
 
+grpBT = "⑧ Backtest window (out-of-sample testing)"
+useDates  = input.bool(false, "Limit entries to a date window", group=grpBT,
+     tooltip="For out-of-sample validation without a paid plan. Set a window (e.g. 2020–2022), note the PF; then set another (2023–now), note the PF. If both are profitable, the edge is consistent across time.")
+startDate = input.time(timestamp("01 Jan 2020 00:00 +0000"), "Window start", group=grpBT)
+endDate   = input.time(timestamp("31 Dec 2022 23:59 +0000"), "Window end",   group=grpBT)
+
 // ------------------------------ Calculations ---------------------------------
 ema   = ta.ema(close, emaLen)
 emaUp = ema > ema[slopeLook]
@@ -76,10 +82,11 @@ atr   = ta.atr(atrLen)
 upper = ta.highest(high, donLen)[1]   // highest high of the prior donLen bars
 lower = ta.lowest(low,  donLen)[1]
 
-inSess = not useSession or not na(time(timeframe.period, sess, sessTZ))
+inSess   = not useSession or not na(time(timeframe.period, sess, sessTZ))
+inWindow = not useDates or (time >= startDate and time <= endDate)
 
-longBreak  = allowLong  and upTrend and close > upper and inSess
-shortBreak = allowShort and dnTrend and close < lower and inSess
+longBreak  = allowLong  and upTrend and close > upper and inSess and inWindow
+shortBreak = allowShort and dnTrend and close < lower and inSess and inWindow
 
 // --------------------------- Position sizing ---------------------------------
 f_qty(dist) =>
