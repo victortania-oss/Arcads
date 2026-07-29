@@ -1,20 +1,22 @@
 //@version=5
 // =============================================================================
-//  GOLD TREND RIDER — Trend-Following
-//  A from-scratch trend system built for gold's character (trends on macro,
-//  whipsaws intraday). NOT the ICC bot — a different engine:
+//  TREND RIDER — Trend-Following  (gold · crude · crypto · any trending market)
+//  A general, volatility-adaptive trend engine. ONE bot — run it on each market
+//  via its own layout, tuned with the settings. NOT the ICC bot:
 //    FILTER : trade only with the higher-trend (price vs a long EMA, sloping)
 //    ENTRY  : Donchian breakout (new N-bar high/low) in the trend direction
 //    STOP   : initial ATR stop, then an ATR "chandelier" trailing stop that
 //             ratchets in your favour so winners run and losers get cut
 //    RISK   : position auto-sized to a fixed % of equity per trade
 //
-//  Educational template — NOT financial advice. Validate on a big sample AND
-//  out-of-sample before trusting it. Gold is hard; this may not hold up.
+//  Because stops & sizing are ATR-based, it adapts to each instrument's own
+//  volatility — so the same engine fits gold, crude, and crypto with different
+//  input presets. Educational template — NOT financial advice. Validate on a
+//  big sample AND out-of-sample per market before trusting it.
 // =============================================================================
 strategy(
-     title             = "Gold Trend Rider — Trend-Following",
-     shorttitle        = "GOLD-TREND",
+     title             = "Trend Rider — Trend-Following",
+     shorttitle        = "TREND",
      overlay           = true,
      initial_capital   = 100000,
      default_qty_type  = strategy.fixed,
