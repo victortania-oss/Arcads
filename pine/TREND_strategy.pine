@@ -30,19 +30,19 @@ strategy(
 
 // ------------------------------ Inputs ---------------------------------------
 grpTrend = "① Trend filter"
-emaLen   = input.int(100, "Trend EMA length", minval=5, group=grpTrend,
+emaLen   = input.int(200, "Trend EMA length", minval=5, group=grpTrend,
      tooltip="Only long above this EMA, short below. The regime filter that keeps you with the trend.")
 useSlope = input.bool(true, "Require EMA sloping in trend direction", group=grpTrend,
      tooltip="Extra filter: EMA must be rising to go long / falling to go short. Cuts counter-trend chop.")
 slopeLook = input.int(3, "EMA slope lookback (bars)", minval=1, group=grpTrend)
-useADX    = input.bool(true, "Require trend strength (ADX filter)", group=grpTrend,
+useADX    = input.bool(false, "Require trend strength (ADX filter)", group=grpTrend,
      tooltip="Only trade when ADX shows a genuine trend — the bot stands aside in choppy/ranging markets. This directly targets the choppy periods where trend-following bleeds.")
 adxThresh = input.float(20, "ADX threshold (trend strength)", minval=5, step=1, group=grpTrend,
      tooltip="ADX above this = trending (trade). Below = chop (stand aside). 20 = moderate, 25 = strong-trend-only.")
 adxLen    = input.int(14, "ADX length", minval=1, group=grpTrend)
 
 grpEntry = "② Entry (breakout)"
-donLen   = input.int(20, "Breakout lookback (bars)", minval=2, group=grpEntry,
+donLen   = input.int(55, "Breakout lookback (bars)", minval=2, group=grpEntry,
      tooltip="Enter long when price closes above the highest high of this many prior bars (Donchian breakout); short on a new low.")
 
 grpStop  = "③ Stop & trail (ATR)"
