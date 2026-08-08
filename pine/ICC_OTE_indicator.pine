@@ -1,0 +1,282 @@
+//@version=5
+// =============================================================================
+//  ICC + OTE — MTF Indicator / Alerts edition
+//  Same top-down logic as the strategy (1D bias · 4H confirm · 1H entry) but as
+//  an indicator: plots the OTE zone, FVG / order-block boxes, a bias table, and
+//  fires alertcondition() signals you can forward to the webhook bridge.
+//
+//  Apply on your 1H entry chart. Educational template — not financial advice.
+// =============================================================================
+indicator("ICC + OTE — MTF Alerts", shorttitle="ICC-OTE MTF Alerts", overlay=true,
+     max_boxes_count=20, max_lines_count=20, max_labels_count=200)
+
+// ------------------------------ Inputs ---------------------------------------
+tfBias    = input.timeframe("1D",  "Bias timeframe (structure)")
+tfConfirm = input.timeframe("240", "Confirmation timeframe (4H)")
+oteSource = input.string("Confirmation", "Draw OTE / Fib on", options=["Bias", "Confirmation"])
+pivotLen  = input.int(5, "Swing lookback (pivots)", minval=2)
+useFVG    = input.bool(true,  "Require 1H FVG confluence")
+autoEntry  = input.bool(true, "Auto-pick shallowest entry meeting min R:R")
+fibA       = input.float(0.618, "Entry A — shallow", minval=0.4, maxval=0.95, step=0.001)
+fibB       = input.float(0.705, "Entry B — common",  minval=0.4, maxval=0.95, step=0.001)
+fibC       = input.float(0.786, "Entry C — deep",    minval=0.4, maxval=0.95, step=0.001)
+manualEntry = input.string("0.705 (B)", "Manual entry level (auto off)", options=["0.618 (A)", "0.705 (B)", "0.786 (C)"])
+minRR      = input.float(2.0, "Minimum R:R", minval=0.5, step=0.1)
+targetExt  = input.float(0.0, "R:R target beyond leg extreme (× leg)", minval=0.0, step=0.1)
+slBufTicks = input.float(4, "Stop buffer (ticks beyond leg)", minval=0)
+requirePD  = input.bool(true, "Require correct Premium/Discount")
+requirePocketConf = input.bool(true, "Require a confluence AT the entry zone")
+confWin    = input.int(40, "Confluence zone valid for N bars", minval=5)
+useSweep      = input.bool(false, "Require liquidity sweep before entry")
+sweepPivotLen = input.int(3,  "Minor swing lookback (1H)", minval=1)
+sweepWindow   = input.int(10, "Sweep valid for N bars", minval=1)
+allowLong  = input.bool(true, "Allow longs")
+allowShort = input.bool(true, "Allow shorts")
+volLen     = input.int(20, "Volume average length", minval=1)
+volMult    = input.float(1.0, "Volume threshold (× average)", minval=0.1, step=0.1)
+requireVol = input.bool(false, "Require above-average volume (hard filter)")
+minConfl   = input.int(2, "Minimum confluences to trade", minval=0, maxval=5)
+useSessions = input.bool(true, "Trade only London / NY")
+sessTZ      = input.string("America/New_York", "Session timezone")
+londonSess  = input.session("0200-0500", "London kill zone")
+nySess      = input.session("0700-1000", "New York kill zone")
+emphasizeNY = input.bool(true, "Emphasize NY (stricter filter in London)")
+showZone  = input.bool(true, "Show OTE zone + Fib")
+showFVG   = input.bool(true, "Show 1H FVG box")
+showOB    = input.bool(true, "Show 1H order block")
+showTable = input.bool(true, "Show bias table")
+
+// --------------------- HTF structure (Indication) ----------------------------
+f_structure() =>
+    ph = ta.pivothigh(pivotLen, pivotLen)
+    pl = ta.pivotlow(pivotLen, pivotLen)
+    var float lastPH = na
+    var float prevPH = na
+    var float lastPL = na
+    var float prevPL = na
+    if not na(ph)
+        prevPH := lastPH
+        lastPH := ph
+    if not na(pl)
+        prevPL := lastPL
+        lastPL := pl
+    bull = not na(ph) and not na(prevPH) and ph > prevPH and not na(lastPL)
+    bear = not na(pl) and not na(prevPL) and pl < prevPL and not na(lastPH)
+    var int   b  = 0
+    var float lh = na
+    var float ll = na
+    if bull
+        b  := 1
+        lh := ph
+        ll := lastPL
+    if bear
+        b  := -1
+        ll := pl
+        lh := lastPH
+    [b, lh, ll]
+
+[biasD, legHiD, legLoD] = request.security(syminfo.tickerid, tfBias,    f_structure(), lookahead=barmerge.lookahead_off)
+[bias4, legHi4, legLo4] = request.security(syminfo.tickerid, tfConfirm, f_structure(), lookahead=barmerge.lookahead_off)
+
+aligned = not na(biasD) and biasD != 0 and biasD == bias4
+dir     = aligned ? biasD : 0
+
+useBiasLeg = oteSource == "Bias"
+legHi = useBiasLeg ? legHiD : legHi4
+legLo = useBiasLeg ? legLoD : legLo4
+
+// -------------------------- OTE zone (Correction) ----------------------------
+rng     = na(legHi) or na(legLo) ? na : legHi - legLo
+oteMid  = na(rng) ? na : dir == 1 ? legHi - rng * 0.705   : dir == -1 ? legLo + rng * 0.705   : na
+
+// Entry selection: shallowest level that clears the min R:R to the target.
+equil       = na(rng) ? na : (legHi + legLo) / 2.0
+tgtLong     = na(rng) ? na : legHi + rng * targetExt
+tgtShort    = na(rng) ? na : legLo - rng * targetExt
+slBaseLong  = na(rng) ? na : legLo - slBufTicks * syminfo.mintick
+slBaseShort = na(rng) ? na : legHi + slBufTicks * syminfo.mintick
+f_rrLong(f) =>
+    e = legHi - rng * f
+    r = e - slBaseLong
+    r > 0 ? (tgtLong - e) / r : 0.0
+f_rrShort(f) =>
+    e = legLo + rng * f
+    r = slBaseShort - e
+    r > 0 ? (e - tgtShort) / r : 0.0
+manFib = manualEntry == "0.618 (A)" ? fibA : manualEntry == "0.786 (C)" ? fibC : fibB
+chosenFibLong  = na(rng) ? na : autoEntry ? (f_rrLong(fibA)  >= minRR ? fibA : f_rrLong(fibB)  >= minRR ? fibB : f_rrLong(fibC)  >= minRR ? fibC : na) : (f_rrLong(manFib)  >= minRR ? manFib : na)
+chosenFibShort = na(rng) ? na : autoEntry ? (f_rrShort(fibA) >= minRR ? fibA : f_rrShort(fibB) >= minRR ? fibB : f_rrShort(fibC) >= minRR ? fibC : na) : (f_rrShort(manFib) >= minRR ? manFib : na)
+limitLong  = na(chosenFibLong)  ? na : legHi - rng * chosenFibLong
+limitShort = na(chosenFibShort) ? na : legLo + rng * chosenFibShort
+
+// Entry zone (0.618..0.786) for the confluence-overlap test + shading.
+ezHiLong  = na(rng) ? na : legHi - rng * fibA
+ezLoLong  = na(rng) ? na : legHi - rng * fibC
+ezLoShort = na(rng) ? na : legLo + rng * fibA
+ezHiShort = na(rng) ? na : legLo + rng * fibC
+inDiscount = na(equil) ? false : not na(limitLong)  and limitLong  < equil
+inPremium  = na(equil) ? false : not na(limitShort) and limitShort > equil
+
+var bool  entered   = false
+var float prevLegHi = na
+var float prevLegLo = na
+if legHi != prevLegHi or legLo != prevLegLo
+    entered := false
+prevLegHi := legHi
+prevLegLo := legLo
+
+// --------------------- 1H confluence: FVG + Order Block -----------------------
+bullFVG = low  > high[2]
+bearFVG = high < low[2]
+fvgWindow  = 30
+hasBullFVG = ta.barssince(bullFVG) <= fvgWindow
+hasBearFVG = ta.barssince(bearFVG) <= fvgWindow
+
+var float bullOBhi = na
+var float bullOBlo = na
+var float bearOBhi = na
+var float bearOBlo = na
+if bullFVG
+    obi = close[2] < open[2] ? 2 : close[3] < open[3] ? 3 : 2
+    bullOBhi := high[obi]
+    bullOBlo := low[obi]
+if bearFVG
+    obi = close[2] > open[2] ? 2 : close[3] > open[3] ? 3 : 2
+    bearOBhi := high[obi]
+    bearOBlo := low[obi]
+
+// -------------------- 1H liquidity sweep (stop raid) -------------------------
+phN = ta.pivothigh(sweepPivotLen, sweepPivotLen)
+plN = ta.pivotlow(sweepPivotLen, sweepPivotLen)
+var float lastMinorLow  = na
+var float lastMinorHigh = na
+if not na(plN)
+    lastMinorLow  := plN
+if not na(phN)
+    lastMinorHigh := phN
+bullSweep = not na(lastMinorLow)  and low  < lastMinorLow  and close > lastMinorLow
+bearSweep = not na(lastMinorHigh) and high > lastMinorHigh and close < lastMinorHigh
+hasBullSweep = ta.barssince(bullSweep) <= sweepWindow
+hasBearSweep = ta.barssince(bearSweep) <= sweepWindow
+
+// ---------------- Confluence ZONES for the golden-pocket overlap test ----------
+var float fvgBLo = na
+var float fvgBHi = na
+var int   fvgBBar = na
+var float fvgSLo = na
+var float fvgSHi = na
+var int   fvgSBar = na
+if bullFVG
+    fvgBLo := high[2]
+    fvgBHi := low[0]
+    fvgBBar := bar_index
+if bearFVG
+    fvgSLo := high[0]
+    fvgSHi := low[2]
+    fvgSBar := bar_index
+var int obBBar = na
+var int obSBar = na
+if bullFVG
+    obBBar := bar_index
+if bearFVG
+    obSBar := bar_index
+var float ifvgBLo = na
+var float ifvgBHi = na
+var int   ifvgBBar = na
+var float ifvgSLo = na
+var float ifvgSHi = na
+var int   ifvgSBar = na
+if not na(fvgSHi) and close > fvgSHi and close[1] <= fvgSHi
+    ifvgBLo := fvgSLo
+    ifvgBHi := fvgSHi
+    ifvgBBar := bar_index
+if not na(fvgBLo) and close < fvgBLo and close[1] >= fvgBLo
+    ifvgSLo := fvgBLo
+    ifvgSHi := fvgBHi
+    ifvgSBar := bar_index
+body    = math.abs(close - open)
+lowWick = math.min(open, close) - low
+upWick  = high - math.max(open, close)
+var float rejBLo = na
+var float rejBHi = na
+var int   rejBBar = na
+var float rejSLo = na
+var float rejSHi = na
+var int   rejSBar = na
+if lowWick > body and lowWick > 0
+    rejBLo := low
+    rejBHi := math.min(open, close)
+    rejBBar := bar_index
+if upWick > body and upWick > 0
+    rejSLo := math.max(open, close)
+    rejSHi := high
+    rejSBar := bar_index
+f_hit(_zlo, _zhi, _zbar, _plo, _phi) =>
+    not na(_zlo) and not na(_plo) and (bar_index - _zbar) <= confWin and _zlo <= _phi and _zhi >= _plo
+bullPocketConf = f_hit(fvgBLo, fvgBHi, fvgBBar, ezLoLong, ezHiLong) or f_hit(bullOBlo, bullOBhi, obBBar, ezLoLong, ezHiLong) or f_hit(ifvgBLo, ifvgBHi, ifvgBBar, ezLoLong, ezHiLong) or f_hit(rejBLo, rejBHi, rejBBar, ezLoLong, ezHiLong)
+bearPocketConf = f_hit(fvgSLo, fvgSHi, fvgSBar, ezLoShort, ezHiShort) or f_hit(bearOBlo, bearOBhi, obSBar, ezLoShort, ezHiShort) or f_hit(ifvgSLo, ifvgSHi, ifvgSBar, ezLoShort, ezHiShort) or f_hit(rejSLo, rejSHi, rejSBar, ezLoShort, ezHiShort)
+
+// ---------------------- Sessions + volume confluence -------------------------
+inLondon  = not na(time(timeframe.period, londonSess, sessTZ))
+inNY      = not na(time(timeframe.period, nySess, sessTZ))
+inSession = not useSessions or inLondon or inNY
+
+volAvg   = ta.sma(volume, volLen)
+volOK    = volume > volAvg * volMult
+inBullOB = not na(bullOBlo) and low  <= bullOBhi and low  >= bullOBlo
+inBearOB = not na(bearOBlo) and high >= bearOBlo and high <= bearOBhi
+bullConfl = (hasBullFVG ? 1 : 0) + (inBullOB ? 1 : 0) + (hasBullSweep ? 1 : 0) + (volOK ? 2 : 0)
+bearConfl = (hasBearFVG ? 1 : 0) + (inBearOB ? 1 : 0) + (hasBearSweep ? 1 : 0) + (volOK ? 2 : 0)
+reqConfl  = useSessions and emphasizeNY and inLondon and not inNY ? minConfl + 1 : minConfl
+
+// ------------------------------- Signals -------------------------------------
+// Alert fires the first time price reaches the chosen OTE entry level (where the
+// strategy's limit order would fill), with bias + session + confluence confirmed.
+inZoneLong  = dir == 1  and not na(limitLong)  and low  <= limitLong  and low  > legLo
+inZoneShort = dir == -1 and not na(limitShort) and high >= limitShort and high < legHi
+longSig  = allowLong  and inZoneLong  and inSession and (not requireVol or volOK) and bullConfl >= reqConfl and (not requirePD or inDiscount) and (not requirePocketConf or bullPocketConf) and (not useFVG or hasBullFVG) and (not useSweep or hasBullSweep) and not entered
+shortSig = allowShort and inZoneShort and inSession and (not requireVol or volOK) and bearConfl >= reqConfl and (not requirePD or inPremium)  and (not requirePocketConf or bearPocketConf) and (not useFVG or hasBearFVG) and (not useSweep or hasBearSweep) and not entered
+if longSig or shortSig
+    entered := true
+
+// ------------------------------- Markup --------------------------------------
+plot(showZone and dir != 0 ? oteMid : na, "OTE 0.705 (ref)", color=color.new(color.orange, 40), style=plot.style_linebr)
+// Entry zone (0.618–0.786) + 50% equilibrium.
+ezTop = dir == 1 ? ezHiLong : dir == -1 ? ezHiShort : na
+ezBot = dir == 1 ? ezLoLong : dir == -1 ? ezLoShort : na
+ez1 = plot(showZone and dir != 0 ? ezTop : na, "Entry zone top", color=color.new(color.yellow, 0), style=plot.style_linebr)
+ez2 = plot(showZone and dir != 0 ? ezBot : na, "Entry zone bot", color=color.new(color.yellow, 0), style=plot.style_linebr)
+fill(ez1, ez2, color=showZone and dir != 0 ? color.new(color.yellow, 75) : na, title="Entry zone")
+plot(showZone and dir != 0 ? equil : na, "Equilibrium 50%", color=color.new(color.white, 40), style=plot.style_linebr)
+plot(showZone and dir != 0 ? (dir == 1 ? limitLong : limitShort) : na, "Entry level", color=color.new(color.fuchsia, 0), style=plot.style_linebr, linewidth=2)
+
+if showFVG and bullFVG
+    box.new(bar_index[2], low[0], bar_index + 3, high[2], border_color=color.new(color.teal, 40), bgcolor=color.new(color.teal, 88))
+if showFVG and bearFVG
+    box.new(bar_index[2], low[2], bar_index + 3, high[0], border_color=color.new(color.red, 40), bgcolor=color.new(color.red, 88))
+if showOB and bullFVG and not na(bullOBlo)
+    box.new(bar_index - 3, bullOBhi, bar_index + 3, bullOBlo, border_color=color.new(color.green, 20), bgcolor=color.new(color.green, 85))
+if showOB and bearFVG and not na(bearOBlo)
+    box.new(bar_index - 3, bearOBhi, bar_index + 3, bearOBlo, border_color=color.new(color.maroon, 20), bgcolor=color.new(color.maroon, 85))
+
+plotshape(longSig,  title="Long entry",  style=shape.labelup,   location=location.belowbar, color=color.teal, text="ICC▲", textcolor=color.white, size=size.small)
+plotshape(shortSig, title="Short entry", style=shape.labeldown, location=location.abovebar, color=color.red,  text="ICC▼", textcolor=color.white, size=size.small)
+plotchar(useSweep and bullSweep, title="Bull sweep", char="⨯", location=location.belowbar, color=color.new(color.teal, 0), size=size.tiny)
+plotchar(useSweep and bearSweep, title="Bear sweep", char="⨯", location=location.abovebar, color=color.new(color.red, 0),  size=size.tiny)
+
+f_arrow(b) => b == 1 ? "▲ Bull" : b == -1 ? "▼ Bear" : "– None"
+f_col(b)   => b == 1 ? color.teal : b == -1 ? color.red : color.gray
+if showTable and barstate.islast
+    var table t = table.new(position.top_right, 2, 4, border_width=1)
+    table.cell(t, 0, 0, "Bias " + tfBias,       text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(t, 1, 0, f_arrow(biasD),          text_color=f_col(biasD), bgcolor=color.new(color.black, 30))
+    table.cell(t, 0, 1, "Confirm " + tfConfirm,  text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(t, 1, 1, f_arrow(bias4),          text_color=f_col(bias4), bgcolor=color.new(color.black, 30))
+    table.cell(t, 0, 2, "Aligned",               text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(t, 1, 2, aligned ? "YES" : "no",  text_color=aligned ? color.teal : color.gray, bgcolor=color.new(color.black, 30))
+    table.cell(t, 0, 3, "Setup",                 text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(t, 1, 3, dir == 1 ? "LONG" : dir == -1 ? "SHORT" : "wait", text_color=f_col(dir), bgcolor=color.new(color.black, 30))
+
+// ------------------------------- Alerts --------------------------------------
+alertcondition(longSig,  title="ICC-OTE MTF Long",  message='{"strategy":"ICC-OTE-MTF","ticker":"{{ticker}}","action":"buy","price":{{close}},"bias":"1D+4H bull","tf":"{{interval}}"}')
+alertcondition(shortSig, title="ICC-OTE MTF Short", message='{"strategy":"ICC-OTE-MTF","ticker":"{{ticker}}","action":"sell","price":{{close}},"bias":"1D+4H bear","tf":"{{interval}}"}')

@@ -1,0 +1,163 @@
+//@version=5
+// =============================================================================
+//  SESSION BREAKOUT — Opening Range (ORB)
+//  A different engine again: an intraday time-of-day edge, not trend-following.
+//    RANGE  : mark the high/low of a session's opening window (e.g. the first
+//             hour of the NY / COMEX open)
+//    ENTRY  : during the trading window, break ABOVE the range = long,
+//             break BELOW = short (the session's directional move)
+//    STOP   : the opposite side of the range (or an ATR stop)
+//    TARGET : an R-multiple of the risk; flat by end of the trading window
+//    RISK   : position auto-sized to a fixed % of equity per trade
+//
+//  Best on 15m–1H. Educational template — NOT financial advice. Validate on a
+//  big sample AND out-of-sample (use the built-in date window) before trusting.
+// =============================================================================
+strategy(
+     title             = "Session Breakout — Opening Range",
+     shorttitle        = "ORB",
+     overlay           = true,
+     initial_capital   = 100000,
+     default_qty_type  = strategy.fixed,
+     default_qty_value = 1,
+     commission_type   = strategy.commission.percent,
+     commission_value  = 0.02,
+     slippage          = 1,
+     pyramiding        = 0,
+     process_orders_on_close = true,
+     calc_on_order_fills     = true)
+
+// ------------------------------ Inputs ---------------------------------------
+grpSess = "① Session windows"
+tz        = input.string("America/New_York", "Timezone", group=grpSess,
+     tooltip="Session times below are read in this timezone, regardless of the symbol's exchange.")
+orSess    = input.session("0800-0900", "Opening-range window", group=grpSess,
+     tooltip="The bot marks the high & low of this window each day. Default = first hour of the NY/COMEX gold open. Try London: 0300-0400.")
+tradeSess = input.session("0900-1300", "Trading window (breakouts valid)", group=grpSess,
+     tooltip="Breakouts of the opening range only count during this window. Positions are closed when it ends.")
+
+grpEntry = "② Entry / exit"
+stopMode = input.string("Opposite range side", "Stop", options=["Opposite range side", "ATR"], group=grpEntry,
+     tooltip="Stop at the other end of the opening range, or a multiple of ATR from entry.")
+atrLen   = input.int(14, "ATR length", minval=1, group=grpEntry)
+atrMult  = input.float(1.5, "ATR stop multiple", minval=0.2, step=0.1, group=grpEntry)
+rr       = input.float(2.0, "Target (R multiple)", minval=0.5, step=0.1, group=grpEntry)
+closeEOD = input.bool(true, "Close at end of trading window", group=grpEntry)
+oneShot  = input.bool(true, "One trade per session", group=grpEntry)
+
+grpRisk  = "③ Risk"
+riskPct  = input.float(1.0, "Risk per trade (% of equity)", minval=0.05, maxval=100, step=0.1, group=grpRisk)
+roundContr = input.bool(true, "Round size to whole contracts", group=grpRisk)
+
+grpDir   = "④ Direction"
+allowLong  = input.bool(true, "Allow longs",  group=grpDir)
+allowShort = input.bool(true, "Allow shorts", group=grpDir)
+
+grpBT = "⑤ Backtest window (out-of-sample testing)"
+useDates  = input.bool(false, "Limit entries to a date window", group=grpBT,
+     tooltip="Set 2020–2022, note PF; then 2023–now, note PF. Both profitable = a consistent edge.")
+startDate = input.time(timestamp("01 Jan 2020 00:00 +0000"), "Window start", group=grpBT)
+endDate   = input.time(timestamp("31 Dec 2022 23:59 +0000"), "Window end",   group=grpBT)
+
+grpAlert = "⑥ Alerts"
+alertStyle = input.string("Readable (manual)", "Alert format", options=["Readable (manual)", "JSON (webhook)"], group=grpAlert)
+
+// ------------------------------ Calculations ---------------------------------
+atr     = ta.atr(atrLen)
+inOR    = not na(time(timeframe.period, orSess,    tz))
+inTrade = not na(time(timeframe.period, tradeSess, tz))
+inWindow = not useDates or (time >= startDate and time <= endDate)
+
+// Build the opening range; reset at the first bar of the OR window each day.
+var float orHigh = na
+var float orLow  = na
+var bool  orReady = false
+var bool  tradedToday = false
+newOR = inOR and not inOR[1]
+if newOR
+    orHigh := high
+    orLow  := low
+    orReady := false
+    tradedToday := false
+else if inOR
+    orHigh := math.max(orHigh, high)
+    orLow  := math.min(orLow,  low)
+if inOR[1] and not inOR    // OR window just closed → range is set
+    orReady := true
+
+// --------------------------- Position sizing ---------------------------------
+f_qty(dist) =>
+    raw = dist > 0 and syminfo.pointvalue > 0 ? (strategy.equity * riskPct / 100.0) / (dist * syminfo.pointvalue) : 0.0
+    roundContr ? math.floor(raw) : raw
+
+// ------------------------------- Entries -------------------------------------
+canTrade = orReady and inTrade and inWindow and (not oneShot or not tradedToday) and strategy.position_size == 0
+longBreak  = allowLong  and canTrade and not na(orHigh) and close > orHigh
+shortBreak = allowShort and canTrade and not na(orLow)  and close < orLow
+
+var float pendSL = na
+if longBreak
+    sl  = stopMode == "ATR" ? close - atrMult * atr : orLow
+    qty = f_qty(close - sl)
+    if qty > 0 and close > sl
+        pendSL := sl
+        tradedToday := true
+        strategy.entry("Long", strategy.long, qty=qty)
+else if shortBreak
+    sl  = stopMode == "ATR" ? close + atrMult * atr : orHigh
+    qty = f_qty(sl - close)
+    if qty > 0 and sl > close
+        pendSL := sl
+        tradedToday := true
+        strategy.entry("Short", strategy.short, qty=qty)
+
+// --------------------------------- Exits -------------------------------------
+var float entryPx = na
+var float tgtPx   = na
+var float initSize = na
+longFill  = strategy.position_size > 0 and strategy.position_size[1] <= 0
+shortFill = strategy.position_size < 0 and strategy.position_size[1] >= 0
+if longFill
+    entryPx  := strategy.position_avg_price
+    tgtPx    := entryPx + (entryPx - pendSL) * rr
+    initSize := math.abs(strategy.position_size)
+    msg = alertStyle == "JSON (webhook)" ? '{"strategy":"ORB","ticker":"' + syminfo.tickerid + '","action":"buy","price":' + str.tostring(entryPx) + ',"size":' + str.tostring(initSize) + ',"sl":' + str.tostring(pendSL) + ',"tp":' + str.tostring(tgtPx) + ',"tf":"' + timeframe.period + '"}' : "🟢 ORB LONG " + syminfo.ticker + " (" + timeframe.period + ")\nEntry " + str.tostring(entryPx) + "   Size " + str.tostring(initSize) + "\nStop " + str.tostring(pendSL) + "   Target " + str.tostring(tgtPx) + "  (" + str.tostring(rr) + "R)\nFlat by end of session."
+    alert(msg, alert.freq_once_per_bar)
+if shortFill
+    entryPx  := strategy.position_avg_price
+    tgtPx    := entryPx - (pendSL - entryPx) * rr
+    initSize := math.abs(strategy.position_size)
+    msg = alertStyle == "JSON (webhook)" ? '{"strategy":"ORB","ticker":"' + syminfo.tickerid + '","action":"sell","price":' + str.tostring(entryPx) + ',"size":' + str.tostring(initSize) + ',"sl":' + str.tostring(pendSL) + ',"tp":' + str.tostring(tgtPx) + ',"tf":"' + timeframe.period + '"}' : "🔴 ORB SHORT " + syminfo.ticker + " (" + timeframe.period + ")\nEntry " + str.tostring(entryPx) + "   Size " + str.tostring(initSize) + "\nStop " + str.tostring(pendSL) + "   Target " + str.tostring(tgtPx) + "  (" + str.tostring(rr) + "R)\nFlat by end of session."
+    alert(msg, alert.freq_once_per_bar)
+
+if strategy.position_size > 0
+    strategy.exit("Long exit", "Long", stop=pendSL, limit=tgtPx)
+if strategy.position_size < 0
+    strategy.exit("Short exit", "Short", stop=pendSL, limit=tgtPx)
+
+// Flatten at the end of the trading window (no overnight hold).
+if closeEOD and not inTrade and inTrade[1] and strategy.position_size != 0
+    strategy.close_all(comment="session end")
+
+// ------------------------------- Markup --------------------------------------
+plotColH = orReady and (inTrade or inOR) ? color.new(color.teal, 0) : na
+plotColL = orReady and (inTrade or inOR) ? color.new(color.red, 0)  : na
+plot(orReady ? orHigh : na, "OR high", color=plotColH, style=plot.style_linebr, linewidth=1)
+plot(orReady ? orLow  : na, "OR low",  color=plotColL, style=plot.style_linebr, linewidth=1)
+bgcolor(inOR ? color.new(color.blue, 90) : na, title="Opening range window")
+plot(strategy.position_size != 0 ? pendSL : na, "Stop",   color=color.new(color.red, 0),   style=plot.style_linebr)
+plot(strategy.position_size != 0 ? tgtPx  : na, "Target", color=color.new(color.green, 0), style=plot.style_linebr)
+plotshape(longFill,  title="Long entry",  style=shape.labelup,   location=location.belowbar, color=color.teal, text="▲", textcolor=color.white, size=size.small)
+plotshape(shortFill, title="Short entry", style=shape.labeldown, location=location.abovebar, color=color.red,  text="▼", textcolor=color.white, size=size.small)
+
+// ------------------------------- Info table ----------------------------------
+if barstate.islast
+    stateTxt = inOR ? "building range" : inTrade ? (orReady ? "watching breakout" : "range not set") : "closed"
+    posTxt = strategy.position_size > 0 ? "LONG" : strategy.position_size < 0 ? "SHORT" : "flat"
+    var table t = table.new(position.top_right, 2, 3, border_width=1)
+    table.cell(t, 0, 0, "Session", text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(t, 1, 0, stateTxt, text_color=inTrade ? color.teal : color.gray, bgcolor=color.new(color.black, 30))
+    table.cell(t, 0, 1, "OR hi/lo", text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(t, 1, 1, na(orHigh) ? "–" : str.tostring(math.round(orHigh * 100) / 100) + " / " + str.tostring(math.round(orLow * 100) / 100), text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(t, 0, 2, "Position", text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(t, 1, 2, posTxt, text_color=color.white, bgcolor=color.new(color.black, 30))
